@@ -1,0 +1,9 @@
+- [Clock over System time](feedback_clock_over_system_time.md) — always inject Clock, never use System.currentTimeMillis()
+- [Flyway repair ≠ re-execution](feedback_flyway_repair_does_not_reexecute.md) — repair updates checksums only, never re-runs the SQL
+- [Simple direct fixes](feedback_prefer_simple_direct_fixes.md) — give manual commands, don't over-automate recovery scripts
+- [Clean migration history](feedback_clean_migration_history.md) — consolidate and clean DB state rather than stacking fix-on-fix migrations
+- [No reserved keywords in variables](feedback_no_reserved_keywords_in_variables.md) — never use `record`, `class`, etc. as variable names
+- [Version selection discipline](feedback_always_fetch_latest_version.md) — 3-step rule (latest, compatibility, migration) for any version decision; training-data versions are effectively random
+- [macOS Docker Desktop diagnostics](feedback_macos_docker_desktop_diagnostics.md) — PATH + context checks before concluding the daemon is off
+- [Verify end-to-end](feedback_verify_end_to_end.md) — verification must walk the whole pipeline (producer → transport → consumer → presentation), never stop at the producer
+- [replace_all numeric prefix hazard](feedback_replace_all_numeric_prefix_hazard.md) — `"y": 4` replace_all corrupts `"y": 42`; prefer contextual edits or descending-order shifts

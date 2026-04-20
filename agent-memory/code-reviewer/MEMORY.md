@@ -1,0 +1,3 @@
+- [Review thoroughness](feedback_review_thoroughness.md) — apply concurrency analysis symmetrically; check alert expressions against cold-start/zero values
+- [Always re-check git state](feedback_always_check_git_state.md) — re-run git status/diff and Read files live for every review; never trust prior snapshots
+- [Observability audience is service-on-call](feedback_observability_audience.md) — target fintech service on-call engineer (no-NOC model), not Tier-1; tighten register, don't re-register; 4-beat template
