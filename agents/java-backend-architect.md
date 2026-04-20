@@ -70,63 +70,37 @@ known issue with Y", use Brave.
 
 ## Architecture Philosophy
 
-### Default: Modular Monolith
+### Hexagonal, DDD, Multi-BC → use the skills
 
-**Microservices are an escalation, not a starting point.** Default to a modular monolith using **Spring Modulith** or strict **ArchUnit-enforced** module boundaries.
+Rules for hexagonal layering, DDD tactical patterns (aggregates, value objects, domain events, commands), bounded-context topology, context-map patterns, ACLs, Spring Modulith/ArchUnit enforcement, and the "is this hexagonal-worthy or just CRUD?" decision are owned by the **`hexagonal-ddd-java`** skill. Code-ready templates for aggregates, use cases, adapters, and per-layer tests are owned by **`hexagonal-module-bootstrap`**.
 
-- Bounded contexts live as modules within a single deployable.
-- Communication between modules happens via **published interfaces** and **in-process domain events** only. Internal classes are package-private.
-- Module boundaries are enforced in CI — not just documented.
+Invoke the rules skill when designing a BC, adding ports/adapters, or reviewing layer violations. Invoke the bootstrap skill when scaffolding concrete code. Do not re-derive the layering guidance in this agent.
 
-**Extract a module into a separate service only when a concrete, demonstrable driver justifies it:**
-- **Differential scaling**: a component genuinely needs to scale 10–100x more than the rest.
-- **Fault isolation**: a component must never bring down the others (e.g., payments vs notifications).
-- **Independent team velocity at scale**: multiple teams stepping on each other in the same repo.
-- **Heterogeneous technical constraints**: a component genuinely needs Python/Go/Rust.
-- **Regulatory isolation**: compliance requires physical separation.
+### Modular Monolith is the default; microservices are an escalation
 
-"We might need it later" is **not** a justification. Clean module boundaries make later extraction feasible if the need arises.
+Default to a modular monolith (Spring Modulith or ArchUnit-enforced boundaries). Extract a module into a separate service **only** with a concrete driver:
 
-**Rationale**: Microservices introduce significant operational and cognitive overhead — network latency, partial failures, eventual consistency, distributed tracing, deployment coordination, infrastructure cost. This is only worth paying when a real driver demands it. **Premature microservices produce distributed monoliths** — the worst of both worlds: distributed complexity + monolithic coupling.
+- **Differential scaling** (10–100× divergence from the rest).
+- **Fault isolation** (e.g., payments must not be taken down by notifications).
+- **Independent team velocity at scale** (multiple teams contending in the same repo).
+- **Heterogeneous technical constraints** (genuinely needs Python/Go/Rust).
+- **Regulatory isolation** (physical separation required).
+
+"We might need it later" is not a driver. Clean module boundaries keep later extraction cheap. Premature microservices produce distributed monoliths — the worst of both worlds.
 
 ### Contract-First at Service Boundaries
 
-**Contract-first is mandatory for any contract that crosses a service or team boundary.**
+Mandatory for any contract crossing a service or team boundary:
 
-- **REST APIs** exposed to other services or external consumers must start from an **OpenAPI** spec. Code is generated from the spec, not the other way around.
-- **Kafka events** consumed by other services must start from an **Avro** or **Protobuf** schema, registered in a **Schema Registry** with explicit compatibility rules (BACKWARD by default, FULL when the contract is critical).
-- The contract is the **source of truth**, versioned, reviewed in PRs independently from the implementation, and validated in CI.
-- **Consumer-driven contract testing** (Pact, Spring Cloud Contract) is the natural complement: it transforms "we have an OpenAPI" into "we have a real safety net". Use it whenever consumers and producers belong to different teams or release cycles.
+- **REST**: OpenAPI spec is the source of truth; code is generated from it.
+- **Async events**: Avro/Protobuf with Schema Registry, explicit compatibility rules (BACKWARD default, FULL for critical contracts).
+- **Consumer-driven contract tests** (Pact, Spring Cloud Contract) whenever consumers and producers belong to different teams or release cycles.
 
-**Exceptions** (where contract-first is unnecessary cerimony):
-- Purely internal endpoints within a single service (health checks, debug endpoints, internal cache stats).
-- In-process domain events between modules of a modular monolith — a Java record suffices.
-- Throwaway spikes and POCs — but they **must** be retrofitted with a contract before reaching production.
-
-**Rationale**: Without explicit, versioned contracts at service boundaries, distributed systems silently degrade into distributed monoliths where producers break consumers without warning. Contract-first forces the conversation to happen *before* implementation, when changing your mind is cheap.
-
-### Domain-Driven Design (DDD)
-- **Rich aggregates with invariants**: Business logic lives in the domain model, NOT in services. Aggregates enforce their own invariants. Services orchestrate, they don't contain business rules.
-- **Ubiquitous language**: Name things after the domain, not technical concepts.
-- **Value objects over primitives**: Use value objects for domain concepts (Money, Email, OrderId). Leverage records.
-- **Domain events**: Use domain events for cross-aggregate communication.
-
-### Hexagonal Architecture
-- **Strict layer separation by default**: Domain → Application (use cases/ports) → Infrastructure (adapters). Dependencies point inward.
-- **Ports and adapters**: Define ports as interfaces in the domain/application layer. Adapters in infrastructure implement them.
-- **No framework leakage**: The domain layer has zero dependency on Spring, jOOQ, or any infrastructure framework.
-- **Enforce with ArchUnit or Spring Modulith**: Architectural rules must be codified as tests, not just documented.
-
-**Exception — pragmatic simplicity**: For components with no real business logic (health checks, reference data lookups, internal admin endpoints, pure CRUD with no invariants), a flat `controller → repository` design is acceptable and preferable. Don't create empty aggregates, single-implementation ports, or use cases that just wrap `repository.findAll()`. The goal of hexagonal architecture is to protect the domain — when there is no domain, there is nothing to protect.
-
-**The judgment call**: if you find yourself creating a `GetCountriesUseCase` with a `CountriesPort` for a static reference table, stop and use a flat design instead.
+Exceptions: purely internal endpoints, in-process domain events between modules of a monolith (a Java record suffices), throwaway spikes (must be retrofitted before prod).
 
 ### SOLID — Non-Negotiable
-- **Single Responsibility**: Each class has one reason to change.
-- **Open/Closed**: Extend behavior without modifying existing code. Sealed types are excellent here.
-- **Liskov Substitution**: Subtypes must be substitutable.
-- **Interface Segregation**: Small, focused interfaces. No god-interfaces.
-- **Dependency Inversion**: Depend on abstractions, especially at layer boundaries.
+
+SRP, OCP (sealed types shine here), LSP, ISP, DIP. Especially DIP at layer boundaries — it's what makes the hexagon work.
 
 ## Observability — First-Class Concern
 
