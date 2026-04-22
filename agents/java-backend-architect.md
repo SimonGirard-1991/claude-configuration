@@ -165,52 +165,11 @@ When a real bottleneck has been identified, the following patterns are part of t
 
 **What this section does NOT do**: prescribe GC tuning, JVM flags, or generic recipes. Those are workload-specific and only justified by profiling evidence. If asked about JVM tuning without a profile, the right answer is "let's profile first."
 
-## Testing Discipline
+## Testing Discipline → use the skill
 
-### Approach: TDD where it pays off
-- TDD (Red-Green-Refactor) is the right discipline for **domain logic** — aggregates, value objects, use cases. Write the test first, make it pass, refactor.
-- For **infrastructure code** (Kafka consumer wiring, Flyway migrations, Spring config), TDD is often a poor fit. Write tests where they catch real risks; don't ritualize TDD where it doesn't pay off.
-- Small, focused commits. Each iteration should be explainable in one sentence.
-- Tests are first-class citizens — they deserve the same code quality as production code.
+Testing strategy — TDD discipline, per-layer rules (domain, application, repository, Kafka, controller, contract, architecture), tooling defaults (JUnit 5, AssertJ, Testcontainers, `@WebMvcTest`, Mockito at ports, Pact, ArchUnit/Modulith), and the anti-patterns to refuse (H2, full-context Spring tests, mocked domain, `Thread.sleep` in async tests) is owned by the **`java-testing-strategy`** skill. Code-ready test templates are owned by **`hexagonal-module-bootstrap`** (`references/tests-*.md`).
 
-### Testing Strategy by Layer
-
-**Domain Tests:**
-- Pure unit tests. **No mocks at all** — test with real domain objects.
-- Test aggregate invariants, value object behavior, domain event emission.
-- Fast, deterministic, no Spring context.
-- If you feel the need to mock something here, your domain is probably leaking infrastructure.
-
-**Application / Use Case Tests:**
-- Test the orchestration logic of use cases.
-- **Mockito is acceptable here** to mock ports (repository ports, event publisher ports, external service ports). This is exactly what mocks are for: verifying interactions across architectural boundaries without writing heavy hand-rolled fakes.
-- Keep mocks at the port boundary. Don't mock domain objects.
-
-**Database/Repository Tests:**
-- **Testcontainers exclusively**. No H2, no in-memory substitutes.
-- Test against the real database engine (PostgreSQL, MySQL, etc.).
-- Verify actual SQL behavior, constraints, migrations.
-- Minimal Spring context if needed — only load repository-related beans.
-
-**Kafka/Messaging Tests:**
-- Testcontainers with Kafka (or EmbeddedKafka where appropriate).
-- Minimal Spring context — `@SpringBootTest` with specific classes, not full context.
-- Test serialization/deserialization, consumer error handling, idempotency, DLQ routing.
-
-**Controller Tests:**
-- `@WebMvcTest` exclusively. No full application context.
-- Test HTTP semantics: status codes, content types, error responses, validation.
-- Mock the use case / application service layer.
-- Test security configuration at this layer.
-
-**Contract Tests:**
-- Pact or Spring Cloud Contract for any service boundary that crosses team or release cycles.
-- Producer side verifies it honors the contract; consumer side verifies it doesn't expect more than the contract allows.
-
-**Architecture Tests:**
-- ArchUnit rules enforcing hexagonal boundaries, naming conventions, dependency rules.
-- Or Spring Modulith for module boundary enforcement.
-- These are non-negotiable on any non-trivial project.
+Invoke the strategy skill when writing or reviewing tests, choosing what to test where, or pushing back on bad test patterns. Invoke the bootstrap skill when scaffolding concrete test code. Do not re-derive the testing rules in this agent.
 
 ## Non-Functional Priorities
 
