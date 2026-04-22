@@ -129,26 +129,11 @@ Reliability under partial failure is non-negotiable for any message-driven or cr
 
 Invoke the skill when designing a Kafka/RabbitMQ/SQS consumer or producer, adding a retryable HTTP endpoint, implementing a use case that updates a DB and publishes an event, designing a cross-aggregate or cross-service workflow, or reviewing a PR for reliability gaps (dual writes, missing idempotency, unbounded retries, no DLQ, sagas without compensations). Do not re-derive the reliability rules in this agent.
 
-## Performance Patterns
+## Performance Patterns → use the skill
 
-**Guiding principle: performance work is driven by measurement, not intuition.** Profile first (JFR, async-profiler, APM traces), identify the actual bottleneck, then apply the targeted pattern. Never optimize speculatively. Never recommend GC flags or pool sizes without a flame graph or allocation profile that justifies them.
+Performance work is driven by measurement, not intuition. Rules for profile-first discipline, caching, pagination, batching, N+1 detection, virtual threads vs bounded pools, HikariCP sizing, indexing and execution plans, read-replica lag handling, and the CQRS-is-an-escalation stance are owned by the **`java-performance-patterns`** skill.
 
-When a real bottleneck has been identified, the following patterns are part of the staff-level toolkit:
-
-- **Caching**: Use **Caffeine** for in-process caching (read-through, bounded size, explicit TTL, hit/miss metrics exposed via Micrometer). Use **Redis** for distributed caching when multiple instances must share state. **A cache without hit-ratio metrics is a bug, not an optimization. A cache without an explicit invalidation strategy is a time bomb.** Always document what triggers eviction.
-- **Pagination**: **Keyset (seek) pagination by default**, not offset-based. Offset pagination collapses beyond a few thousand rows because the database must scan everything it skips. Document the pagination strategy explicitly in the API contract.
-- **Batching**: Never make N calls in a loop when 1 batched call is possible.
-  - Database writes: jOOQ `batchInsert` / `batchUpdate`, JDBC batch.
-  - Kafka producers: tune `linger.ms` and `batch.size` to trade latency for throughput where appropriate.
-  - Outbound HTTP: batch endpoints when the API supports it.
-- **N+1 query detection**: Mandatory checklist item in code review. jOOQ helps by making SQL explicit, but you still have to look. For ORM-based code paths, enable SQL logging in tests to catch N+1 patterns before they reach prod.
-- **CQRS read models**: An **escalation**, not a default. Justified when the read model structurally diverges from the write model — aggregated dashboards, full-text search, denormalized projections for low-latency queries. Not justified for a simple `findAll` that happens to be slow (fix the query or add an index first).
-- **Async boundaries**: Use **virtual threads** (Project Loom) for I/O-bound workloads — they shine for blocking I/O at high concurrency. Use a **dedicated bounded pool** for CPU-bound work. Never block an event loop (Netty, Reactor) with synchronous code.
-- **Connection pooling**: HikariCP by default. Pool size should be **calculated, not guessed** — start from formulas like `((core_count * 2) + effective_spindle_count)` and tune empirically against real load. An oversized pool is often worse than an undersized one (DB contention, context switching).
-- **Indexing**: For any query that hits a table with >10k rows, verify the execution plan. A missing index is the single most common cause of latency cliffs in production. Verify with `EXPLAIN ANALYZE`, not intuition.
-- **Read replicas**: An option for read-heavy workloads, but introduces replication lag — code must tolerate stale reads, or route latency-sensitive reads to the primary. Don't introduce replicas without explicit handling of lag.
-
-**What this section does NOT do**: prescribe GC tuning, JVM flags, or generic recipes. Those are workload-specific and only justified by profiling evidence. If asked about JVM tuning without a profile, the right answer is "let's profile first."
+Invoke the skill when investigating a latency/throughput regression, designing a read path over a non-trivial table, introducing a cache or pagination contract, sizing a pool, choosing between virtual threads and reactive, or reviewing a PR for performance claims. Do not re-derive the performance rules in this agent. If asked about JVM tuning without a profile, the right answer is "let's profile first."
 
 ## Testing Discipline → use the skill
 
@@ -162,7 +147,7 @@ Invoke the strategy skill when writing or reviewing tests, choosing what to test
 2. **Observability**: If you can't see it, you can't operate it. See the `java-observability` skill.
 3. **Security**: Never an afterthought. See dedicated section.
 4. **Reliability**: Idempotency, transactions, retries, DLQs. See the `java-reliability-messaging` skill.
-5. **Performance/Latency**: Think about p99 latency, not just averages. Profile before optimizing. See Performance Patterns section for the toolkit.
+5. **Performance/Latency**: Think about p99 latency, not just averages. Profile before optimizing. See the `java-performance-patterns` skill for the toolkit.
 6. **Throughput**: Design for horizontal scalability. Stateless services, partitioned consumers, connection pooling.
 
 ## Working Style
