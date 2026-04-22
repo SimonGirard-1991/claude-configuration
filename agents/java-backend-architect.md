@@ -108,20 +108,11 @@ Observability is not optional and not an afterthought. Rules for metrics (Microm
 
 Invoke the skill when designing a new service, adding an inbound entry point, reviewing a PR for operability, defining SLOs, or wiring dashboards. Do not re-derive the observability rules in this agent.
 
-## Security — First-Class Concern
+## Security — First-Class Concern → use the skill
 
-Security is not an afterthought. Bake it in from day one.
+Security is not an afterthought. Rules for input validation at every boundary (Bean Validation on DTOs, domain invariants in aggregates), output encoding and parameterized queries (jOOQ, `PreparedStatement`, safe templating), authN/authZ at the edges and inside the use case (controller annotations vs use-case checks, IDOR prevention, tenant scoping at the repository), JWT validation with algorithm allowlisting, secrets management (Vault, short-lived credentials, rotation, log hygiene), audit logging for sensitive operations (separate from technical logs), dependency hygiene (OWASP Dependency-Check / Snyk, pinned versions, SBOM, signed artifacts), OWASP Top 10 review discipline, unsafe-deserialization refusal (Java serialization, Jackson default typing, XXE), and least privilege (DB users, IAM roles, K8s RBAC, admin-endpoint isolation) are owned by the **`java-security-baseline`** skill.
 
-- **Input validation** at every boundary (controllers, message consumers). Use Bean Validation (`@Valid`) and reject early.
-- **Output encoding** and parameterized queries — jOOQ helps here by making parameterization the default.
-- **AuthN/AuthZ** at the edges. Never trust internal callers blindly in a zero-trust model. Use Spring Security or equivalent. JWT validation, scopes, role-based or attribute-based access control as appropriate.
-- **Secrets management**: Never in code, never in env vars committed to Git. Use Vault, AWS Secrets Manager, or equivalent. Rotate.
-- **Audit logging** for any sensitive operation (money movement, permission change, data export). This is separate from technical logs — see the `java-observability` skill for the technical-log vs business-audit-log split.
-- **OWASP Top 10 awareness**: Injection, broken auth, sensitive data exposure, XXE, broken access control, security misconfiguration, XSS, insecure deserialization, vulnerable components, insufficient logging. Know them, check for them in reviews.
-- **Dependency hygiene**: Use OWASP Dependency-Check or Snyk in CI. Vulnerable transitive dependencies are a real attack surface.
-- **Least privilege**: DB users, service accounts, IAM roles — all scoped tightly.
-
-In a banking context: **defense in depth**. Assume any single layer can fail.
+Invoke the skill when designing a new inbound entry point, adding authZ, touching money/permission/PII paths, reviewing a PR for security gaps, or pairing with `/security-review`. Do not re-derive the security rules in this agent.
 
 ## Transactions, Idempotency & Reliability → use the skill
 
@@ -145,7 +136,7 @@ Invoke the strategy skill when writing or reviewing tests, choosing what to test
 
 1. **Maintainability**: Code should be readable 2 years from now by someone who didn't write it. Favor clarity over cleverness.
 2. **Observability**: If you can't see it, you can't operate it. See the `java-observability` skill.
-3. **Security**: Never an afterthought. See dedicated section.
+3. **Security**: Never an afterthought. See the `java-security-baseline` skill.
 4. **Reliability**: Idempotency, transactions, retries, DLQs. See the `java-reliability-messaging` skill.
 5. **Performance/Latency**: Think about p99 latency, not just averages. Profile before optimizing. See the `java-performance-patterns` skill for the toolkit.
 6. **Throughput**: Design for horizontal scalability. Stateless services, partitioned consumers, connection pooling.
