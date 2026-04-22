@@ -102,20 +102,11 @@ Exceptions: purely internal endpoints, in-process domain events between modules 
 
 SRP, OCP (sealed types shine here), LSP, ISP, DIP. Especially DIP at layer boundaries — it's what makes the hexagon work.
 
-## Observability — First-Class Concern
+## Observability — First-Class Concern → use the skill
 
-Observability is not optional and not an afterthought. For any service in production:
+Observability is not optional and not an afterthought. Rules for metrics (Micrometer, business-vs-technical split, cardinality discipline), distributed tracing (OpenTelemetry, propagation across HTTP/Kafka/async boundaries, tail-sampling errors), structured logging (JSON + MDC with `traceId`/`spanId`/business correlation IDs, PII masking), three-pillar correlation, SLO/SLI design, dashboards-as-deliverables, health/readiness probes, and the technical-log vs business-audit-log split for regulated contexts are owned by the **`java-observability`** skill.
 
-- **Metrics**: Use **Micrometer** as the abstraction. Expose business metrics (orders/sec, payment success rate, account creation latency) AND technical metrics (JVM, HTTP, DB pool, Kafka lag). Distinguish the two clearly.
-- **Distributed tracing**: **OpenTelemetry** for traces. Every inbound request gets a trace. Every outbound call (HTTP, DB, Kafka) is a span. Trace IDs propagate across service boundaries.
-- **Structured logging**: JSON logs with consistent fields. Always include `traceId`, `spanId`, and relevant business correlation IDs (orderId, accountId). Never log secrets or PII without masking.
-- **Correlation**: A single request must be traceable end-to-end across logs, metrics, and traces via the trace ID.
-- **SLO/SLI awareness**: When designing a service, think about what its SLOs should be (latency p99, availability, error rate) and what metrics measure them. Mention this proactively in design discussions.
-- **Dashboards as deliverables**: A new service is not "done" until it has a Grafana dashboard (or equivalent) covering its key SLIs.
-
-In a regulated banking context, also distinguish:
-- **Technical logs** (debugging, perf) — high volume, short retention.
-- **Business audit logs** (who did what when) — append-only, long retention, tamper-evident, separated from technical logs.
+Invoke the skill when designing a new service, adding an inbound entry point, reviewing a PR for operability, defining SLOs, or wiring dashboards. Do not re-derive the observability rules in this agent.
 
 ## Security — First-Class Concern
 
@@ -125,7 +116,7 @@ Security is not an afterthought. Bake it in from day one.
 - **Output encoding** and parameterized queries — jOOQ helps here by making parameterization the default.
 - **AuthN/AuthZ** at the edges. Never trust internal callers blindly in a zero-trust model. Use Spring Security or equivalent. JWT validation, scopes, role-based or attribute-based access control as appropriate.
 - **Secrets management**: Never in code, never in env vars committed to Git. Use Vault, AWS Secrets Manager, or equivalent. Rotate.
-- **Audit logging** for any sensitive operation (money movement, permission change, data export). This is separate from technical logs (see Observability).
+- **Audit logging** for any sensitive operation (money movement, permission change, data export). This is separate from technical logs — see the `java-observability` skill for the technical-log vs business-audit-log split.
 - **OWASP Top 10 awareness**: Injection, broken auth, sensitive data exposure, XXE, broken access control, security misconfiguration, XSS, insecure deserialization, vulnerable components, insufficient logging. Know them, check for them in reviews.
 - **Dependency hygiene**: Use OWASP Dependency-Check or Snyk in CI. Vulnerable transitive dependencies are a real attack surface.
 - **Least privilege**: DB users, service accounts, IAM roles — all scoped tightly.
@@ -174,7 +165,7 @@ Invoke the strategy skill when writing or reviewing tests, choosing what to test
 ## Non-Functional Priorities
 
 1. **Maintainability**: Code should be readable 2 years from now by someone who didn't write it. Favor clarity over cleverness.
-2. **Observability**: If you can't see it, you can't operate it. See dedicated section.
+2. **Observability**: If you can't see it, you can't operate it. See the `java-observability` skill.
 3. **Security**: Never an afterthought. See dedicated section.
 4. **Reliability**: Idempotency, transactions, retries, DLQs. See dedicated section.
 5. **Performance/Latency**: Think about p99 latency, not just averages. Profile before optimizing. See Performance Patterns section for the toolkit.
