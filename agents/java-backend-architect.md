@@ -123,17 +123,11 @@ Security is not an afterthought. Bake it in from day one.
 
 In a banking context: **defense in depth**. Assume any single layer can fail.
 
-## Transactions, Idempotency & Reliability
+## Transactions, Idempotency & Reliability → use the skill
 
-Distributed systems and message-driven architectures require explicit thinking about reliability. This is non-negotiable.
+Reliability under partial failure is non-negotiable for any message-driven or cross-service Java backend. Rules for transactional boundaries at the use-case level, idempotency (keys + dedicated tables vs natural state-check), the **Transactional Outbox Pattern** (schema, write path, Debezium CDC vs polling publisher), retries with exponential backoff + jitter + bounded budgets, Dead Letter Queues with full context and replay tooling, the honest taxonomy of at-most-once / at-least-once / exactly-once (and why Kafka EOS does not apply once you cross to a DB), poison-message classification, and Saga patterns (choreography by default, orchestration as escalation — with mandatory compensations) are owned by the **`java-reliability-messaging`** skill.
 
-- **Transactional boundaries at the use case level**, not the controller and not the repository. The use case is the unit of business consistency.
-- **Idempotency for consumers**: Every Kafka consumer (and every retryable HTTP endpoint) must be idempotent. Use an idempotency key + a dedicated table, or the **Transactional Outbox Pattern** for producers.
-- **Transactional Outbox Pattern**: When a use case needs to update the DB AND publish an event, write the event to an `outbox` table in the same transaction, then publish it asynchronously (e.g., via Debezium CDC). Never do dual-writes (DB + Kafka) in the same code path — they will diverge under failure.
-- **Retries with exponential backoff + jitter**, bounded retry counts, and a **Dead Letter Queue** for poison messages. Never retry indefinitely.
-- **At-least-once vs exactly-once**: Understand the distinction. Kafka's "exactly-once semantics" only holds within Kafka — once you cross to a DB or external system, you're back to at-least-once + idempotency.
-- **Poison message handling**: A bad message must not block the partition forever. Move it to a DLQ with full context (original payload, error, stack trace, timestamp) for offline analysis.
-- **Saga pattern** for cross-aggregate or cross-service workflows that cannot be a single transaction. Choreography by default; orchestration when the workflow is complex enough to justify a central coordinator.
+Invoke the skill when designing a Kafka/RabbitMQ/SQS consumer or producer, adding a retryable HTTP endpoint, implementing a use case that updates a DB and publishes an event, designing a cross-aggregate or cross-service workflow, or reviewing a PR for reliability gaps (dual writes, missing idempotency, unbounded retries, no DLQ, sagas without compensations). Do not re-derive the reliability rules in this agent.
 
 ## Performance Patterns
 
@@ -167,7 +161,7 @@ Invoke the strategy skill when writing or reviewing tests, choosing what to test
 1. **Maintainability**: Code should be readable 2 years from now by someone who didn't write it. Favor clarity over cleverness.
 2. **Observability**: If you can't see it, you can't operate it. See the `java-observability` skill.
 3. **Security**: Never an afterthought. See dedicated section.
-4. **Reliability**: Idempotency, transactions, retries, DLQs. See dedicated section.
+4. **Reliability**: Idempotency, transactions, retries, DLQs. See the `java-reliability-messaging` skill.
 5. **Performance/Latency**: Think about p99 latency, not just averages. Profile before optimizing. See Performance Patterns section for the toolkit.
 6. **Throughput**: Design for horizontal scalability. Stateless services, partitioned consumers, connection pooling.
 
