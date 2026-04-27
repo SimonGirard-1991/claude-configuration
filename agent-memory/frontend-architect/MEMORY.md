@@ -1,1 +1,3 @@
 - [User frontend experience level](user_role.md) — user is backend-strong, less practiced on frontend; explain the *why* proactively
+- [React effects on transition commits](feedback_react_effect_transition_commits.md) — shared-ref staleness when two effects share a dep; use a pending-flag ref, not "compare ref to prop"
+- [A11y — fieldset traps](feedback_a11y_fieldset.md) — reset UA border/padding; never put aria-describedby on `<fieldset>` (NVDA/VoiceOver ignore it)

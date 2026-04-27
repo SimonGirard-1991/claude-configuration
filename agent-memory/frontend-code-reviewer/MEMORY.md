@@ -1,0 +1,1 @@
+- [Trace effect-ordering bugs when multiple effects share a changed dep](feedback_effect_ordering_bugs.md) — unlatching a guard in one effect can re-fire a one-shot action in the next; check post-terminal paths, not just mid-flight ones.

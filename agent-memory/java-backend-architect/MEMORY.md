@@ -7,3 +7,7 @@
 - [macOS Docker Desktop diagnostics](feedback_macos_docker_desktop_diagnostics.md) — PATH + context checks before concluding the daemon is off
 - [Verify end-to-end](feedback_verify_end_to_end.md) — verification must walk the whole pipeline (producer → transport → consumer → presentation), never stop at the producer
 - [replace_all numeric prefix hazard](feedback_replace_all_numeric_prefix_hazard.md) — `"y": 4` replace_all corrupts `"y": 42`; prefer contextual edits or descending-order shifts
+- [No logic or repos in controllers](feedback_no_logic_or_repos_in_controllers.md) — controllers are HTTP-only; use case / app service is the floor even for anemic CRUD; lead reviews with this when violated
+- [No javadoc on trivial ops](feedback_no_javadoc_on_trivial_ops.md) — skip doc on self-describing methods (getById, simple CRUD); reserve comments for non-obvious invariants and rationale
+- [Mockito annotations over mock()](feedback_mockito_extension_over_manual_mock.md) — prefer @ExtendWith(MockitoExtension.class) + @Mock + @InjectMocks over hand-written mock() calls
+- [AAA comments in tests](feedback_aaa_comments_in_tests.md) — structure every test with explicit // Arrange // Act // Assert section comments
