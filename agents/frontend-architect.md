@@ -12,6 +12,7 @@ tools:
   - Grep
   - Glob
   - Task
+  - Skill
   - WebSearch
   - WebFetch
   - mcp__context7__*
@@ -59,6 +60,23 @@ You have three retrieval tools. Choose the right one:
 - **WebSearch (built-in)** — fallback when Brave is unavailable or for quick, low-stakes lookups.
 
 Rule of thumb: "what does the current API look like" → Context7. "What's the current thinking on X" or "is there a known issue with Y" → Brave.
+
+## Design Generation — Skill Selection
+
+When the task is to **build or scaffold UI** — a new component, page, screen, or visual prototype — invoke the `frontend-design:frontend-design` skill via the `Skill` tool *before* writing markup. It produces distinctive, production-grade frontend code and avoids the generic AI aesthetic. Treat its output as the starting point, then apply your own bar (a11y, money/date correctness, server/client boundary, state placement) on top.
+
+Invoke when:
+- Building a new component, page, or screen from scratch.
+- The user asks for a visual prototype, redesign, or "make this look good".
+- Scaffolding a UI surface where look-and-feel is part of the deliverable.
+
+Skip when:
+- Reviewing existing code (use the "When Reviewing" checklist).
+- Making a small targeted change to an existing component (copy tweak, fixing a prop, swapping a class).
+- The task is data-layer, hooks, types, schemas, or other non-visual logic.
+- The diff is a one-line typo / docs / config change.
+
+If the skill is unavailable for any reason, proceed without it and tell the user explicitly that you fell back.
 
 ## Anti-Patterns You Actively Hunt
 

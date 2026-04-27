@@ -12,6 +12,7 @@ tools:
   - Grep
   - Glob
   - Task
+  - Skill
   - WebSearch
   - WebFetch
   - mcp__context7__*
