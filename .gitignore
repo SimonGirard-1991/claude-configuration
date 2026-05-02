@@ -17,6 +17,7 @@ cache/
 debug/
 file-history/
 paste-cache/
+image-cache/
 shell-snapshots/
 telemetry/
 stats-cache.json
