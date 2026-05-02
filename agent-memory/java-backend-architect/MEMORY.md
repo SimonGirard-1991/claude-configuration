@@ -11,3 +11,12 @@
 - [No javadoc on trivial ops](feedback_no_javadoc_on_trivial_ops.md) — skip doc on self-describing methods (getById, simple CRUD); reserve comments for non-obvious invariants and rationale
 - [Mockito annotations over mock()](feedback_mockito_extension_over_manual_mock.md) — prefer @ExtendWith(MockitoExtension.class) + @Mock + @InjectMocks over hand-written mock() calls
 - [AAA comments in tests](feedback_aaa_comments_in_tests.md) — structure every test with explicit // Arrange // Act // Assert section comments
+- [No internal-planning in operational artifacts](feedback_no_internal_planning_in_artifacts.md) — dashboards/alerts/logs must be self-contained for the operator, never reference "Step N" / ticket IDs / sprint context
+- [Micrometer failure injection](feedback_micrometer_failure_injection.md) — for MeterRegistry failure tests, override protected `newTimer(Meter.Id, ...)` not public `timer(String, ...)` overloads; all public factories route through package-private path
+- [Observability outside business logic](feedback_observability_outside_business_logic.md) — Timer/Counter/MDC/audit code never inline in application service or domain logic; prefer adapter, decorator, or aspect — even for "just a few call sites"
+- [Sonar pre-flight before declaring feature done](feedback_sonar_preflight_before_done.md) — scan diff for S1192/S5778/S5128/dead-annotations before handing back; user gets frustrated when features ship sloppy
+- [S5128 false positive on OpenAPI overrides](feedback_sonar_s5128_openapi_override.md) — don't add @Valid to controller overrides; HV000151 hard-fails because the generated interface already declares it. Use @SuppressWarnings("java:S5128").
+- [Re-review after post-approval edits](feedback_rereview_after_post_approval_edits.md) — after ✅, any code change (even applying a reviewer's own suggestion) requires iteration N+1; don't let the reviewer become a rubber stamp.
+- [No Co-Authored-By trailer](feedback_no_co_authored_by_trailer.md) — never append the Co-Authored-By footer to commit messages, even though the default git workflow does.
+- [Review load-bearing docs](feedback_review_load_bearing_docs.md) — invoke code-reviewer on ADRs, runbooks, alert descriptions, and other operational docs; only skip the reviewer for trivial doc edits.
+- [Subject-only commits for self-explanatory artifacts](feedback_subject_only_commits_for_self_explanatory_artifacts.md) — ADRs, runbooks, generated artifacts, trivial refactors: subject only, no body. Body only when it adds info not derivable from the diff.
