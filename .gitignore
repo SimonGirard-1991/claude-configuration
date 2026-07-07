@@ -30,6 +30,8 @@ plugins/blocklist.json
 plugins/.last_inuse_sweep
 
 daemon/
+daemon.lock
+daemon.status.json
 jobs/
 mcp-needs-auth-cache.json
 .last-cleanup

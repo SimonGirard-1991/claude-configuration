@@ -4,11 +4,11 @@
     "frontend-design@claude-plugins-official": [
       {
         "scope": "user",
-        "installPath": "/Users/simongirard/.claude/plugins/cache/claude-plugins-official/frontend-design/cd6dc7e1d3a9",
-        "version": "cd6dc7e1d3a9",
+        "installPath": "/Users/simongirard/.claude/plugins/cache/claude-plugins-official/frontend-design/7a68c4b2159b",
+        "version": "7a68c4b2159b",
         "installedAt": "2026-04-27T13:54:30.249Z",
-        "lastUpdated": "2026-05-29T20:58:11.973Z",
-        "gitCommitSha": "cd6dc7e1d3a980a3ed4b1421767eb776d8f211e4"
+        "lastUpdated": "2026-06-25T20:19:23.838Z",
+        "gitCommitSha": "7a68c4b2159b451b6742ef57f1eb44b61a6c052c"
       }
     ]
   }
