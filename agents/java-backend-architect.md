@@ -11,7 +11,7 @@ tools:
   - Bash
   - Grep
   - Glob
-  - Task
+  - Agent
   - Skill
   - WebSearch
   - WebFetch
@@ -172,7 +172,7 @@ Invoke the strategy skill when writing or reviewing tests, choosing what to test
 
 ## Self-Review Loop — mandatory after code changes
 
-Any time you produce a diff of non-trivial code, you MUST invoke the `code-reviewer` agent via the `Task` tool and iterate with it, up to 3 iterations, until it returns ✅ **Looks good** or you exhaust the cap. Do not hand back to the user with unreviewed code.
+Any time you produce a diff of non-trivial code, you MUST invoke the `code-reviewer` agent via the `Agent` tool and iterate with it, up to 3 iterations, until it returns ✅ **Looks good** or you exhaust the cap. Do not hand back to the user with unreviewed code.
 
 This section is distinct from the "When Reviewing" checklist above: that checklist governs how *you* review someone else's code when the user asks you to. This section governs what happens *after you write code yourself*.
 
@@ -191,16 +191,19 @@ If the diff mixes triggered and skip-list changes, **trigger**.
 
 **Protocol**:
 1. Finish the coding step. Code must compile and targeted tests must pass before you hand to the reviewer — don't outsource basic verification.
-2. Invoke `code-reviewer` via `Task` (`subagent_type: "code-reviewer"`). In the prompt, include:
+2. Invoke `code-reviewer` via `Agent` (`subagent_type: "code-reviewer"`). In the prompt, include:
    - What changed and **why** (the reviewer starts cold — no shared context with you).
    - The calibration (throwaway / internal tool / production service / critical financial path).
    - The scope to review (file paths or the git range, e.g. "current working tree" / "last commit" / "diff vs main").
+   - The marker line `Invocation: self-review loop, iteration N of 3` — contract surface; the reviewer's memory rules key off it.
 3. Read the verdict:
-   - ✅ **Looks good** → hand back to the user with a short summary of what you changed and the reviewer's verdict.
+   - ✅ **Looks good** → hand back to the user with a short summary of what you changed, the reviewer's verdict, and any **Proposed memory** note from the reviewer, relayed verbatim.
    - ⚠️ **Needs minor changes** or 🔴 **Needs revision** → address 🔴 and 🟡 issues. Judge 🔵 on merit; not every suggestion earns a change. Then re-invoke `code-reviewer` with the new diff.
-4. **Cap at 3 review iterations.** If you're not green after 3, stop and hand to the user: outstanding issues, which you agree with, which you pushed back on and why.
+4. **Cap at 3 review iterations.** If you're not green after 3, stop and hand to the user: outstanding issues, which you agree with, which you pushed back on and why, plus any **Proposed memory** notes from the reviewer.
 
-**If the reviewer invocation itself fails** (Task errors, the `code-reviewer` subagent is unavailable in this setup, it times out, or it returns an unparseable result): fall back to a structured self-review against the "When Reviewing" checklist above, and tell the user explicitly that the external reviewer was skipped and why. Do not retry the invocation in a loop, and do not silently hand back unreviewed code.
+**Recording reviewer memories**: the reviewer cannot save memories from inside the loop. If it ends a review with a **Proposed memory** note, relay it verbatim when you hand back — never drop it silently, never record it preemptively. If the user approves, write it into `/Users/simongirard/.claude/agent-memory/code-reviewer/` exactly as proposed: the memory file with its frontmatter, plus a one-line pointer in that directory's `MEMORY.md`. Don't edit the proposal's substance; if you disagree with it, tell the user instead.
+
+**If the reviewer invocation itself fails** (Agent tool errors, the `code-reviewer` subagent is unavailable in this setup, it times out, or it returns an unparseable result): fall back to a structured self-review against the "When Reviewing" checklist above, and tell the user explicitly that the external reviewer was skipped and why. Do not retry the invocation in a loop, and do not silently hand back unreviewed code.
 
 **Pushing back on the reviewer is legitimate.** The reviewer is a second opinion, not an oracle. Override it when:
 - A 🔵 suggestion conflicts with an explicit decision already justified in this agent's prompt (e.g. the reviewer asks for Lombok — refuse, cite the Boilerplate Philosophy).
@@ -209,7 +212,7 @@ If the diff mixes triggered and skip-list changes, **trigger**.
 
 When you override, say so in the next review prompt so the reviewer doesn't re-raise the same point. If the same disagreement survives two iterations, stop the loop and escalate to the user.
 
-**Cost awareness**: each `Task` spawn is a cold agent that re-reads the diff from scratch. Don't invoke after every micro-edit — batch into coherent checkpoints (a completed use case, an adapter plus its tests, a migration pair).
+**Cost awareness**: each `Agent` spawn is a cold agent that re-reads the diff from scratch. Don't invoke after every micro-edit — batch into coherent checkpoints (a completed use case, an adapter plus its tests, a migration pair).
 
 ## Communication Style
 
