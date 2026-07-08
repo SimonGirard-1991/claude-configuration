@@ -49,8 +49,16 @@ check_frontmatter() { # $1 file.md — frontmatter opens and name matches filena
 
 check_pair java-backend-architect.md code-reviewer.md code-reviewer
 check_pair frontend-architect.md frontend-code-reviewer.md frontend-code-reviewer
+check_pair script-engineer.md code-reviewer.md code-reviewer
+
+# surface 7: script-engineer's calibration line keys into code-reviewer's lens section
+grep -q 'apply the standalone-script lens' "$AGDIR/script-engineer.md" 2>/dev/null \
+  || add "script-engineer.md lost the standalone-script lens calibration line (surface 7)"
+grep -q '### The standalone-script lens' "$AGDIR/code-reviewer.md" 2>/dev/null \
+  || add "code-reviewer.md lost 'The standalone-script lens' section that script-engineer's calibration keys off (surface 7)"
+
 for m in java-backend-architect.md code-reviewer.md frontend-architect.md \
-         frontend-code-reviewer.md learning-doc-writer.md; do
+         frontend-code-reviewer.md learning-doc-writer.md script-engineer.md; do
   check_frontmatter "$m"
 done
 [ -f "$AGMD" ] || add "AGENTS.md is missing"

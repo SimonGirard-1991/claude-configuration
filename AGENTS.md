@@ -20,18 +20,20 @@ invokes.
 | Agent | Role | Invoked by |
 |---|---|---|
 | `java-backend-architect` | Staff-level Java backend architect: design, implement, review Java code. | User directly, or auto-routed by the main assistant based on the agent's `description`. |
-| `code-reviewer` | Staff-level code reviewer: read-only review of a diff. | `java-backend-architect` (Self-Review Loop) via the `Agent` tool, or user directly. |
+| `code-reviewer` | Staff-level code reviewer: read-only review of a diff. | `java-backend-architect` and `script-engineer` (Self-Review Loop) via the `Agent` tool, or user directly. |
 | `frontend-architect` | Staff-level frontend architect (React 19 / Next.js 15 / TS strict): design, implement, review. | User directly, or auto-routed by the main assistant based on the agent's `description`. |
 | `frontend-code-reviewer` | Staff-level frontend reviewer: read-only review of a frontend diff. | `frontend-architect` (Self-Review Loop) via the `Agent` tool, or user directly. |
 | `learning-doc-writer` | Produces pandoc-ready learning docs (Markdown → PDF via LuaLaTeX). | User directly. Leaf agent — invokes no other agent and is invoked by none. |
+| `script-engineer` | Staff-level toolsmith: reusable personal scripts and CLI tools (Bash/Python), zsh configuration work, remote-Linux-target scripts. | User directly, or auto-routed by the main assistant based on the agent's `description`. |
 
 ---
 
 ## Contract between architects and their reviewers
 
-Two instances of the same contract: `java-backend-architect` → `code-reviewer` and
-`frontend-architect` → `frontend-code-reviewer`. The surfaces below are identical for
-both pairs unless noted; "the architect" / "the reviewer" mean whichever pair is active.
+Three instances of the same contract: `java-backend-architect` → `code-reviewer`,
+`frontend-architect` → `frontend-code-reviewer`, and `script-engineer` → `code-reviewer`
+(the java and script pairs share the same reviewer). The surfaces below are identical
+for all pairs unless noted; "the architect" / "the reviewer" mean whichever pair is active.
 
 - **Reviewer receives**: diff scope (paths or git range), change summary, calibration, the invocation marker (surface 6), project conventions (via `CLAUDE.md`).
 - **Reviewer returns**: issues categorized 🔴/🟡/🔵, final verdict ✅/⚠️/🔴.
@@ -49,7 +51,8 @@ both pairs unless noted; "the architect" / "the reviewer" mean whichever pair is
    Consumed by each architect under "Self-Review Loop → Read the verdict".
 
 3. **Invocation mechanism**: `Agent` tool with `subagent_type: "code-reviewer"`
-   (resp. `"frontend-code-reviewer"`). Called from each architect under
+   (`java-backend-architect`, `script-engineer`) resp. `"frontend-code-reviewer"`
+   (`frontend-architect`). Called from each architect under
    "Self-Review Loop → Protocol". If this name or mechanism changes, update both agents.
    - History: the tool was named `Task` until Claude Code v2.1.63 renamed it to
      `Agent` (`Task` remains a documented alias, so the loop never broke). Both
@@ -75,8 +78,16 @@ both pairs unless noted; "the architect" / "the reviewer" mean whichever pair is
 
 6. **Invocation marker**: each architect's Self-Review Loop prompt includes the
    line `Invocation: self-review loop, iteration N of 3`. The reviewers' memory
-   rules key off it. If the wording changes, update both architects and both
+   rules key off it. If the wording changes, update all three architects and both
    reviewers.
+
+7. **Calibration lens line** (script pair only): `script-engineer`'s Self-Review
+   Loop prompt includes `Calibration: … apply the standalone-script lens.` (zsh
+   variant: `… apply the standalone-script lens, zsh dialect notes.`), which keys
+   into the `code-reviewer` section "The standalone-script lens". Rename either
+   side and the reviewer silently reviews scripts against service axes instead.
+   The java and frontend pairs pass a plain criticality calibration; no lens
+   coupling exists there.
 
 ### Edge cases worth remembering
 
@@ -104,11 +115,12 @@ both pairs unless noted; "the architect" / "the reviewer" mean whichever pair is
 Since 2026-07-08 the mechanical parts of this checklist are enforced by
 `~/.claude/hooks/validate-agent-contracts.sh`, a PostToolUse hook that runs on
 every edit under `agents/` or to this file and feeds drift back to the editing
-session (exit 2). It checks surfaces 1–3 and 6 plus frontmatter sanity; the
+session (exit 2). It checks surfaces 1–3, 6, and 7 plus frontmatter sanity; the
 judgment items below still need a human. If a contract surface legitimately
 changes, update AGENTS.md **and** the validator in the same commit.
 
-When editing `java-backend-architect.md` (same checklist for `frontend-architect.md`):
+When editing `java-backend-architect.md` (same checklist for `frontend-architect.md`
+and `script-engineer.md`):
 - [ ] If you change how it invokes `code-reviewer`, update the Contract section above.
 - [ ] If you change the severity or verdict it consumes, update `code-reviewer.md` to match.
 - [ ] If you add a new sub-agent invocation, add the contract here.
@@ -116,6 +128,10 @@ When editing `java-backend-architect.md` (same checklist for `frontend-architect
 When editing `code-reviewer.md` (same checklist for `frontend-code-reviewer.md`):
 - [ ] If you change the output format (severity emojis, verdict labels, section headings
       that the architect parses), update `java-backend-architect.md` and the Contract above.
+      `code-reviewer` has two architect consumers (`java-backend-architect`,
+      `script-engineer`) — check both.
+- [ ] If you rename or remove "The standalone-script lens" section, update
+      `script-engineer.md`'s calibration line and the validator (surface 7).
 - [ ] If you change the Freshness protocol or Tool access rules, check that nothing in
       `java-backend-architect.md` assumes the old behavior.
 - [ ] If you change the memory path, update that too in the agent prompt.
