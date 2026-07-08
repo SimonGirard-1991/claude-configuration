@@ -8,7 +8,6 @@ Personal Claude Code configuration. This directory is a git repo; `.gitignore` k
 |---|---|
 | `agents/` | Custom subagents: two architect+reviewer pairs (`java-backend-architect`+`code-reviewer`, `frontend-architect`+`frontend-code-reviewer`), `script-engineer` (reusable Bash/Python scripts, zsh config, remote-Linux targets; self-reviews via `code-reviewer`), `discovery-analyst` (delivery scoping — freelance clients and corporate stakeholders — estimates, calibration tier), plus `learning-doc-writer`. Inter-agent contracts live in `AGENTS.md`. |
 | `skills/` | User-scope skills: `hexagonal-ddd-java`, `hexagonal-module-bootstrap`, five `java-*` skills (testing-strategy, observability, reliability-messaging, performance-patterns, security-baseline), and `client-comms` (client-facing register, five message structures, French business conventions). |
-| `agent-memory/<agent>/` | Persistent per-agent memory. `MEMORY.md` is the index, siblings hold entries. |
 | `hooks/` | Hook scripts wired via `settings.json`: `bash-guard.py` (PreToolUse on Bash — ask on force-push/reset --hard/git clean/secrets access, deny catastrophic `rm -r`), `format-on-edit.sh` (PostToolUse — repo-local prettier, only when the repo has a prettier config; Java/spotless deliberately not hooked, too slow per edit), `validate-agent-contracts.sh` (PostToolUse on edits under `agents/` or `AGENTS.md` — automates the AGENTS.md maintenance checklist, exit 2 feeds drift back to the editing session). Tune patterns in the scripts, not in `settings.json`. |
 | `plans/` (when non-empty) | Saved implementation plans. Git doesn't track empty dirs, so the folder may not exist on a fresh checkout until a plan lands. Delete plans when done — old plans rot. |
 | `.mcp.json` | Project-scope MCP servers (ones anchored to sessions started in `~/.claude/`). |
@@ -17,7 +16,7 @@ Personal Claude Code configuration. This directory is a git repo; `.gitignore` k
 
 ## What's NOT tracked (gitignored)
 
-`settings.local.json`, `projects/`, `sessions/`, `history.jsonl`, `backups/`, `todos/`, `tasks/`, `cache/`, `debug/`, `file-history/`, `paste-cache/`, `shell-snapshots/`, `telemetry/`, `plugins/` (all of it — `installed_plugins.json` is derived state whose recorded SHAs churn on every commit; plugin *enablement* is tracked via `settings.json`), credentials, `.env*`.
+`agent-memory/` (persistent per-agent memory — `MEMORY.md` index + entries; personal calibration data, stays local), `settings.local.json`, `projects/`, `sessions/`, `history.jsonl`, `backups/`, `todos/`, `tasks/`, `cache/`, `debug/`, `file-history/`, `paste-cache/`, `shell-snapshots/`, `telemetry/`, `plugins/` (all of it — `installed_plugins.json` is derived state whose recorded SHAs churn on every commit; plugin *enablement* is tracked via `settings.json`), credentials, `.env*`.
 
 ## MCP servers — where they actually live
 

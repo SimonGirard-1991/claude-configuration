@@ -3,6 +3,7 @@
 auth/
 .env*
 
+agent-memory/
 projects/
 history/
 sessions/
