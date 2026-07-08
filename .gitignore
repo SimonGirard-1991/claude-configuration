@@ -28,6 +28,7 @@ plugins/install-counts-cache.json
 plugins/known_marketplaces.json
 plugins/blocklist.json
 plugins/.last_inuse_sweep
+plugins/installed_plugins.json
 
 daemon/
 daemon.lock
@@ -38,7 +39,6 @@ mcp-needs-auth-cache.json
 .last-update-result.json
 
 settings.local.json
-settings.json
 .claude.json
 .claude.json.backup*
 
