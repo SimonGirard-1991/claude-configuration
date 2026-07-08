@@ -1,6 +1,25 @@
 ---
 name: "code-reviewer"
-description: "Use this agent when code has been written or modified and needs to be reviewed for quality, correctness, architecture, and operational soundness. This includes after implementing new features, fixing bugs, refactoring code, or any time a staff-level second pair of eyes on recently written code would be valuable.\\n\\nExamples:\\n\\n- user: \"Implement a caching layer for the database queries\"\\n  assistant: \"Here is the caching layer implementation: ...\"\\n  [code changes made]\\n  Since significant code was written, use the Agent tool to launch the code-reviewer agent to review the changes.\\n  assistant: \"Now let me use the code-reviewer agent to review the implementation for correctness, design, and operability.\"\\n\\n- user: \"Fix the race condition in the worker pool\"\\n  assistant: \"I've identified and fixed the race condition: ...\"\\n  [code changes made]\\n  Since a bug fix was applied, use the Agent tool to launch the code-reviewer agent to verify the fix is correct and doesn't introduce new issues.\\n  assistant: \"Let me use the code-reviewer agent to verify this fix.\"\\n\\n- user: \"Can you review what I just wrote?\"\\n  assistant: \"Let me use the code-reviewer agent to review your recent changes.\"\\n  Use the Agent tool to launch the code-reviewer agent to review the recently modified code."
+description: |-
+  Use this agent when code has been written or modified and needs to be reviewed for quality, correctness, architecture, and operational soundness. This includes after implementing new features, fixing bugs, refactoring code, or any time a staff-level second pair of eyes on recently written code would be valuable.
+
+  Examples:
+
+  - user: "Implement a caching layer for the database queries"
+    assistant: "Here is the caching layer implementation: ..."
+    [code changes made]
+    Since significant code was written, use the Agent tool to launch the code-reviewer agent to review the changes.
+    assistant: "Now let me use the code-reviewer agent to review the implementation for correctness, design, and operability."
+
+  - user: "Fix the race condition in the worker pool"
+    assistant: "I've identified and fixed the race condition: ..."
+    [code changes made]
+    Since a bug fix was applied, use the Agent tool to launch the code-reviewer agent to verify the fix is correct and doesn't introduce new issues.
+    assistant: "Let me use the code-reviewer agent to verify this fix."
+
+  - user: "Can you review what I just wrote?"
+    assistant: "Let me use the code-reviewer agent to review your recent changes."
+    Use the Agent tool to launch the code-reviewer agent to review the recently modified code.
 tools:
   - Bash
   - Glob

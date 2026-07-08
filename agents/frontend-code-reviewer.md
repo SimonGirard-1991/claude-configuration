@@ -1,6 +1,25 @@
 ---
 name: "frontend-code-reviewer"
-description: "Use this agent when frontend code (React, Next.js App Router, TypeScript) has been written or modified and needs review for quality, correctness, accessibility, performance, and operability. Especially valuable for the shadcn/ui + TanStack Query + Tremor + React Hook Form + Zod stack and for financial apps where number/date/currency correctness matters.\\n\\nExamples:\\n\\n- user: \"I built the transactions table with filters and pagination\"\\n  assistant: \"Here's the implementation: ...\"\\n  [code changes made]\\n  Since significant code was written, use the Agent tool to launch the frontend-code-reviewer agent to review it.\\n  assistant: \"Now let me use the frontend-code-reviewer agent to review the state placement, a11y, and re-render hygiene.\"\\n\\n- user: \"Fix the focus trap on the transaction modal\"\\n  assistant: \"I've fixed the focus trap: ...\"\\n  [code changes made]\\n  Since an a11y-critical fix was applied, use the Agent tool to launch the frontend-code-reviewer agent to verify it.\\n  assistant: \"Let me use the frontend-code-reviewer agent to verify the focus management and keyboard handling.\"\\n\\n- user: \"Can you review my new portfolio dashboard component?\"\\n  assistant: \"Let me use the frontend-code-reviewer agent to review it.\"\\n  Use the Agent tool to launch the frontend-code-reviewer agent."
+description: |-
+  Use this agent when frontend code (React, Next.js App Router, TypeScript) has been written or modified and needs review for quality, correctness, accessibility, performance, and operability. Especially valuable for the shadcn/ui + TanStack Query + Tremor + React Hook Form + Zod stack and for financial apps where number/date/currency correctness matters.
+
+  Examples:
+
+  - user: "I built the transactions table with filters and pagination"
+    assistant: "Here's the implementation: ..."
+    [code changes made]
+    Since significant code was written, use the Agent tool to launch the frontend-code-reviewer agent to review it.
+    assistant: "Now let me use the frontend-code-reviewer agent to review the state placement, a11y, and re-render hygiene."
+
+  - user: "Fix the focus trap on the transaction modal"
+    assistant: "I've fixed the focus trap: ..."
+    [code changes made]
+    Since an a11y-critical fix was applied, use the Agent tool to launch the frontend-code-reviewer agent to verify it.
+    assistant: "Let me use the frontend-code-reviewer agent to verify the focus management and keyboard handling."
+
+  - user: "Can you review my new portfolio dashboard component?"
+    assistant: "Let me use the frontend-code-reviewer agent to review it."
+    Use the Agent tool to launch the frontend-code-reviewer agent.
 tools:
   - Bash
   - Glob

@@ -1,6 +1,21 @@
 ---
 name: "learning-doc-writer"
-description: "Use this agent when the user wants to produce a durable learning document — to consolidate something they just built with Claude Code, explain a technical concept for future-self, prepare for a technical interview, or hand to fellow backend/fullstack developers as an introduction to a subject. Output is a pandoc-ready Markdown file with YAML frontmatter, intended for conversion to PDF via LuaLaTeX. NOT for short README files, inline code comments, ADRs, or PR descriptions — those belong elsewhere.\n\nExamples:\n\n- user: \"Write me a doc explaining the outbox pattern we just implemented in this repo\"\n  assistant: \"I'll use the learning-doc-writer agent to produce a pandoc-ready Markdown walkthrough — primer, code-grounded walkthrough, gotchas, and an interview-ready synthesis.\"\n\n- user: \"I want to learn how Postgres MVCC works deeply enough to talk about it in an interview\"\n  assistant: \"Let me use the learning-doc-writer agent to draft a layered explanation with worked examples, false-positive call-outs, and a 'patterns to memorise' section.\"\n\n- user: \"Can you produce documentation on the React Server Components architecture I just built?\"\n  assistant: \"I'll use the learning-doc-writer agent to write a concept-grounded walkthrough tied to the actual files in this repo, with an end-of-doc synthesis of takeaways.\"\n\n- user: \"Document the Kafka consumer rebalance protocol\"\n  assistant: \"Using the learning-doc-writer agent to produce a layered explanation suitable for both self-learning and onboarding peers.\""
+description: |-
+  Use this agent when the user wants to produce a durable learning document — to consolidate something they just built with Claude Code, explain a technical concept for future-self, prepare for a technical interview, or hand to fellow backend/fullstack developers as an introduction to a subject. Output is a pandoc-ready Markdown file with YAML frontmatter, intended for conversion to PDF via LuaLaTeX. NOT for short README files, inline code comments, ADRs, or PR descriptions — those belong elsewhere.
+
+  Examples:
+
+  - user: "Write me a doc explaining the outbox pattern we just implemented in this repo"
+    assistant: "I'll use the learning-doc-writer agent to produce a pandoc-ready Markdown walkthrough — primer, code-grounded walkthrough, gotchas, and an interview-ready synthesis."
+
+  - user: "I want to learn how Postgres MVCC works deeply enough to talk about it in an interview"
+    assistant: "Let me use the learning-doc-writer agent to draft a layered explanation with worked examples, false-positive call-outs, and a 'patterns to memorise' section."
+
+  - user: "Can you produce documentation on the React Server Components architecture I just built?"
+    assistant: "I'll use the learning-doc-writer agent to write a concept-grounded walkthrough tied to the actual files in this repo, with an end-of-doc synthesis of takeaways."
+
+  - user: "Document the Kafka consumer rebalance protocol"
+    assistant: "Using the learning-doc-writer agent to produce a layered explanation suitable for both self-learning and onboarding peers."
 tools:
   - Read
   - Grep

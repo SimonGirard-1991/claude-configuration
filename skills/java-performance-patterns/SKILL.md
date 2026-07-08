@@ -1,6 +1,13 @@
 ---
 name: java-performance-patterns
-description: Use when profiling, optimizing, or reviewing performance-sensitive paths in a Java backend — caching layers (Caffeine, Redis), pagination at scale, database and HTTP batching, N+1 query detection, virtual threads vs bounded pools for I/O vs CPU work, HikariCP sizing, and index/execution-plan discipline. The headline rule is profile-first: no recommendation without a flame graph, allocation profile, or execution plan that justifies it. Skip for throwaway scripts, spikes, non-Java code, or "just make it faster" requests with no measurement.
+description: >-
+  Use when profiling, optimizing, or reviewing performance-sensitive paths in a Java
+  backend — caching layers (Caffeine, Redis), pagination at scale, database and HTTP
+  batching, N+1 query detection, virtual threads vs bounded pools for I/O vs CPU work,
+  HikariCP sizing, and index/execution-plan discipline. The headline rule is
+  profile-first: no recommendation without a flame graph, allocation profile, or
+  execution plan that justifies it. Skip for throwaway scripts, spikes, non-Java code,
+  or "just make it faster" requests with no measurement.
 ---
 
 # Java Performance Patterns

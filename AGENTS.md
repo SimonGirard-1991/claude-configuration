@@ -101,6 +101,13 @@ both pairs unless noted; "the architect" / "the reviewer" mean whichever pair is
 
 ## Maintenance checklist
 
+Since 2026-07-08 the mechanical parts of this checklist are enforced by
+`~/.claude/hooks/validate-agent-contracts.sh`, a PostToolUse hook that runs on
+every edit under `agents/` or to this file and feeds drift back to the editing
+session (exit 2). It checks surfaces 1–3 and 6 plus frontmatter sanity; the
+judgment items below still need a human. If a contract surface legitimately
+changes, update AGENTS.md **and** the validator in the same commit.
+
 When editing `java-backend-architect.md` (same checklist for `frontend-architect.md`):
 - [ ] If you change how it invokes `code-reviewer`, update the Contract section above.
 - [ ] If you change the severity or verdict it consumes, update `code-reviewer.md` to match.

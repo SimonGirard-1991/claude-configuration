@@ -1,6 +1,13 @@
 ---
 name: java-security-baseline
-description: Use when designing, implementing, or reviewing security-sensitive code paths in a Java backend — input validation at boundaries, parameterized queries, authN/authZ at the edges, secrets management, dependency scanning, audit logging for sensitive operations, and OWASP Top 10 review discipline. The headline rule is defense in depth: assume any single layer can fail, and bake security in from day one rather than bolt it on. Pairs naturally with `/security-review`. Skip for throwaway scripts, spikes, or non-Java code.
+description: >-
+  Use when designing, implementing, or reviewing security-sensitive code paths in a
+  Java backend — input validation at boundaries, parameterized queries, authN/authZ at
+  the edges, secrets management, dependency scanning, audit logging for sensitive
+  operations, and OWASP Top 10 review discipline. The headline rule is defense in
+  depth: assume any single layer can fail, and bake security in from day one rather
+  than bolt it on. Pairs naturally with `/security-review`. Skip for throwaway
+  scripts, spikes, or non-Java code.
 ---
 
 # Java Security Baseline

@@ -1,6 +1,24 @@
 ---
 name: "frontend-architect"
-description: "Use this agent when working on modern web frontends (React 19, Next.js 15 App Router, TypeScript strict) that require architectural decisions, component design, code implementation, or staff-level review. Covers accessibility (WCAG AA), browser performance (Core Web Vitals), financial-data correctness (currency, decimals, dates), and the shadcn/ui + TanStack Query + Tremor + React Hook Form + Zod stack.\n\nExamples:\n\n- user: \"Design the data layer for the portfolio dashboard\"\n  assistant: \"Let me use the frontend-architect agent to design the TanStack Query cache strategy, server/client component split, and URL-state shape.\"\n\n- user: \"Build a multi-step transaction form\"\n  assistant: \"I'll use the frontend-architect agent to implement this with React Hook Form + Zod, proper loading/error/empty states, and accessible focus management.\"\n\n- user: \"Review my transactions table component\"\n  assistant: \"Let me use the frontend-architect agent to review this for URL-state usage, re-render hygiene, a11y, and financial-number correctness.\"\n\n- user: \"How should I structure filters and pagination?\"\n  assistant: \"I'll use the frontend-architect agent to design this as URL state so views are shareable and survive reloads.\"\n\n- user: \"Write component tests for the balance card\"\n  assistant: \"Let me use the frontend-architect agent to write React Testing Library tests that exercise real user behavior, not implementation details.\""
+description: |-
+  Use this agent when working on modern web frontends (React 19, Next.js 15 App Router, TypeScript strict) that require architectural decisions, component design, code implementation, or staff-level review. Covers accessibility (WCAG AA), browser performance (Core Web Vitals), financial-data correctness (currency, decimals, dates), and the shadcn/ui + TanStack Query + Tremor + React Hook Form + Zod stack.
+
+  Examples:
+
+  - user: "Design the data layer for the portfolio dashboard"
+    assistant: "Let me use the frontend-architect agent to design the TanStack Query cache strategy, server/client component split, and URL-state shape."
+
+  - user: "Build a multi-step transaction form"
+    assistant: "I'll use the frontend-architect agent to implement this with React Hook Form + Zod, proper loading/error/empty states, and accessible focus management."
+
+  - user: "Review my transactions table component"
+    assistant: "Let me use the frontend-architect agent to review this for URL-state usage, re-render hygiene, a11y, and financial-number correctness."
+
+  - user: "How should I structure filters and pagination?"
+    assistant: "I'll use the frontend-architect agent to design this as URL state so views are shareable and survive reloads."
+
+  - user: "Write component tests for the balance card"
+    assistant: "Let me use the frontend-architect agent to write React Testing Library tests that exercise real user behavior, not implementation details."
 model: opus
 color: cyan
 memory: user

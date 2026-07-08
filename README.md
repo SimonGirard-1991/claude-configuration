@@ -9,9 +9,10 @@ Personal Claude Code configuration. This directory is a git repo; `.gitignore` k
 | `agents/` | Custom subagents: two architect+reviewer pairs (`java-backend-architect`+`code-reviewer`, `frontend-architect`+`frontend-code-reviewer`) plus `learning-doc-writer`. Inter-agent contracts live in `AGENTS.md`. |
 | `skills/` | User-scope skills: `hexagonal-ddd-java`, `hexagonal-module-bootstrap`, and five `java-*` skills (testing-strategy, observability, reliability-messaging, performance-patterns, security-baseline). |
 | `agent-memory/<agent>/` | Persistent per-agent memory. `MEMORY.md` is the index, siblings hold entries. |
+| `hooks/` | Hook scripts wired via `settings.json`: `bash-guard.py` (PreToolUse on Bash — ask on force-push/reset --hard/git clean/secrets access, deny catastrophic `rm -r`), `format-on-edit.sh` (PostToolUse — repo-local prettier, only when the repo has a prettier config; Java/spotless deliberately not hooked, too slow per edit), `validate-agent-contracts.sh` (PostToolUse on edits under `agents/` or `AGENTS.md` — automates the AGENTS.md maintenance checklist, exit 2 feeds drift back to the editing session). Tune patterns in the scripts, not in `settings.json`. |
 | `plans/` (when non-empty) | Saved implementation plans. Git doesn't track empty dirs, so the folder may not exist on a fresh checkout until a plan lands. Delete plans when done — old plans rot. |
 | `.mcp.json` | Project-scope MCP servers (ones anchored to sessions started in `~/.claude/`). |
-| `settings.json` | User-scope settings: permission allowlist, model/effort defaults, env, plugin enablement. Contains no secrets — safe to track. |
+| `settings.json` | User-scope settings: permission allow/ask/deny lists (deny covers `.env*`/`.envrc`/`.credentials.json` reads+edits; ask covers `.pem`/ssh-key reads), hook wiring, model/effort defaults, env, plugin enablement. Contains no secrets — safe to track. Note: pre-approved session dirs (e.g. the scratchpad) can bypass deny rules — they protect real project/workspace paths. |
 | `README.md` | This file. |
 
 ## What's NOT tracked (gitignored)

@@ -1,6 +1,24 @@
 ---
 name: "java-backend-architect"
-description: "Use this agent when working on Java backend systems requiring architectural decisions, code implementation, code review, or technical design. This includes designing domain models, implementing hexagonal architecture, writing tests, setting up infrastructure components (databases, messaging, APIs), or when you need a staff-engineer-level review of backend code quality, patterns, and trade-offs.\n\nExamples:\n\n- user: \"Design a payment processing domain model with proper aggregates\"\n  assistant: \"Let me use the java-backend-architect agent to design this domain model with rich aggregates and proper invariants.\"\n\n- user: \"I need to implement a new REST endpoint for account creation\"\n  assistant: \"I'll use the java-backend-architect agent to implement this with proper hexagonal architecture, controller tests, and domain logic.\"\n\n- user: \"Review my service class for order fulfillment\"\n  assistant: \"Let me use the java-backend-architect agent to review this code for SOLID principles, DDD patterns, and architectural concerns.\"\n\n- user: \"How should I structure the Kafka consumer for our event-driven flow?\"\n  assistant: \"I'll use the java-backend-architect agent to design the consumer with proper separation of concerns and testability.\"\n\n- user: \"Write integration tests for the repository layer\"\n  assistant: \"Let me use the java-backend-architect agent to write proper Testcontainers-based tests for this repository.\""
+description: |-
+  Use this agent when working on Java backend systems requiring architectural decisions, code implementation, code review, or technical design. This includes designing domain models, implementing hexagonal architecture, writing tests, setting up infrastructure components (databases, messaging, APIs), or when you need a staff-engineer-level review of backend code quality, patterns, and trade-offs.
+
+  Examples:
+
+  - user: "Design a payment processing domain model with proper aggregates"
+    assistant: "Let me use the java-backend-architect agent to design this domain model with rich aggregates and proper invariants."
+
+  - user: "I need to implement a new REST endpoint for account creation"
+    assistant: "I'll use the java-backend-architect agent to implement this with proper hexagonal architecture, controller tests, and domain logic."
+
+  - user: "Review my service class for order fulfillment"
+    assistant: "Let me use the java-backend-architect agent to review this code for SOLID principles, DDD patterns, and architectural concerns."
+
+  - user: "How should I structure the Kafka consumer for our event-driven flow?"
+    assistant: "I'll use the java-backend-architect agent to design the consumer with proper separation of concerns and testability."
+
+  - user: "Write integration tests for the repository layer"
+    assistant: "Let me use the java-backend-architect agent to write proper Testcontainers-based tests for this repository."
 model: opus
 color: yellow
 memory: user
