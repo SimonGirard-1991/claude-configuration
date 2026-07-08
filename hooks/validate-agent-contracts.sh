@@ -58,7 +58,8 @@ grep -q '### The standalone-script lens' "$AGDIR/code-reviewer.md" 2>/dev/null \
   || add "code-reviewer.md lost 'The standalone-script lens' section that script-engineer's calibration keys off (surface 7)"
 
 for m in java-backend-architect.md code-reviewer.md frontend-architect.md \
-         frontend-code-reviewer.md learning-doc-writer.md script-engineer.md; do
+         frontend-code-reviewer.md learning-doc-writer.md script-engineer.md \
+         discovery-analyst.md; do
   check_frontmatter "$m"
 done
 [ -f "$AGMD" ] || add "AGENTS.md is missing"

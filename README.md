@@ -6,8 +6,8 @@ Personal Claude Code configuration. This directory is a git repo; `.gitignore` k
 
 | Path | Purpose |
 |---|---|
-| `agents/` | Custom subagents: two architect+reviewer pairs (`java-backend-architect`+`code-reviewer`, `frontend-architect`+`frontend-code-reviewer`), `script-engineer` (reusable Bash/Python scripts, zsh config, remote-Linux targets; self-reviews via `code-reviewer`), plus `learning-doc-writer`. Inter-agent contracts live in `AGENTS.md`. |
-| `skills/` | User-scope skills: `hexagonal-ddd-java`, `hexagonal-module-bootstrap`, and five `java-*` skills (testing-strategy, observability, reliability-messaging, performance-patterns, security-baseline). |
+| `agents/` | Custom subagents: two architect+reviewer pairs (`java-backend-architect`+`code-reviewer`, `frontend-architect`+`frontend-code-reviewer`), `script-engineer` (reusable Bash/Python scripts, zsh config, remote-Linux targets; self-reviews via `code-reviewer`), `discovery-analyst` (delivery scoping — freelance clients and corporate stakeholders — estimates, calibration tier), plus `learning-doc-writer`. Inter-agent contracts live in `AGENTS.md`. |
+| `skills/` | User-scope skills: `hexagonal-ddd-java`, `hexagonal-module-bootstrap`, five `java-*` skills (testing-strategy, observability, reliability-messaging, performance-patterns, security-baseline), and `client-comms` (client-facing register, five message structures, French business conventions). |
 | `agent-memory/<agent>/` | Persistent per-agent memory. `MEMORY.md` is the index, siblings hold entries. |
 | `hooks/` | Hook scripts wired via `settings.json`: `bash-guard.py` (PreToolUse on Bash — ask on force-push/reset --hard/git clean/secrets access, deny catastrophic `rm -r`), `format-on-edit.sh` (PostToolUse — repo-local prettier, only when the repo has a prettier config; Java/spotless deliberately not hooked, too slow per edit), `validate-agent-contracts.sh` (PostToolUse on edits under `agents/` or `AGENTS.md` — automates the AGENTS.md maintenance checklist, exit 2 feeds drift back to the editing session). Tune patterns in the scripts, not in `settings.json`. |
 | `plans/` (when non-empty) | Saved implementation plans. Git doesn't track empty dirs, so the folder may not exist on a fresh checkout until a plan lands. Delete plans when done — old plans rot. |
@@ -28,8 +28,8 @@ MCP config is split across two files. Track both when troubleshooting a missing 
 
 ### `~/.claude.json` (user home, NOT tracked, not in this repo)
 Added via `claude mcp add --scope user`. Currently holds:
-- `context7` — `@upstash/context7-mcp`, library docs lookup. Used by all six agents.
-- `brave-search` — `@brave/brave-search-mcp-server`, web search. Used by `java-backend-architect`, `frontend-architect`, `learning-doc-writer`, and `script-engineer`.
+- `context7` — `@upstash/context7-mcp`, library docs lookup. Used by all agents except `discovery-analyst` (no library-docs need there).
+- `brave-search` — `@brave/brave-search-mcp-server`, web search. Used by `java-backend-architect`, `frontend-architect`, `learning-doc-writer`, `script-engineer`, and `discovery-analyst`.
 
 Agents reference these via `mcp__context7__*` / `mcp__brave-search__*` in their `tools:` frontmatter — the allowlists are not uniform, so check the specific agent when a tool appears missing. If a pattern stops matching anything at all, the server itself may have been removed or renamed in `~/.claude.json`.
 

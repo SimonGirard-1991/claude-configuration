@@ -25,6 +25,7 @@ invokes.
 | `frontend-code-reviewer` | Staff-level frontend reviewer: read-only review of a frontend diff. | `frontend-architect` (Self-Review Loop) via the `Agent` tool, or user directly. |
 | `learning-doc-writer` | Produces pandoc-ready learning docs (Markdown → PDF via LuaLaTeX). | User directly. Leaf agent — invokes no other agent and is invoked by none. |
 | `script-engineer` | Staff-level toolsmith: reusable personal scripts and CLI tools (Bash/Python), zsh configuration work, remote-Linux-target scripts. | User directly, or auto-routed by the main assistant based on the agent's `description`. |
+| `discovery-analyst` | Delivery scoping, freelance and corporate: discovery questions, scoping docs with out-of-scope lists, estimates, scope-change and hard-commitment assessment, calibration tier declaration. | User directly, or auto-routed by the main assistant based on the agent's `description`. Leaf agent — invokes no other agent; loads the `client-comms` skill for sponsor-facing register. |
 
 ---
 
@@ -88,6 +89,16 @@ for all pairs unless noted; "the architect" / "the reviewer" mean whichever pair
    side and the reviewer silently reviews scripts against service axes instead.
    The java and frontend pairs pass a plain criticality calibration; no lens
    coupling exists there.
+
+### Shared vocabulary (soft coupling, not hook-enforced)
+
+The calibration tier taxonomy — *throwaway / internal tool / production service /
+critical financial system* — originates in the reviewers ("Calibrate your bar")
+and is emitted by `discovery-analyst` in scoping documents (§ Calibration tier),
+so a project's business tier flows into architect/reviewer calibration during the
+build. If the reviewer taxonomy is reworded, update `discovery-analyst.md` to
+match, or scoping docs stop speaking the tier language the reviewers calibrate
+against.
 
 ### Edge cases worth remembering
 
