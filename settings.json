@@ -49,7 +49,35 @@
       "Bash(go build:*)",
       "Bash(docker ps:*)",
       "Bash(docker compose ps:*)",
-      "Bash(docker compose logs:*)"
+      "Bash(docker compose logs:*)",
+      "Bash(rtk git status:*)",
+      "Bash(rtk git log:*)",
+      "Bash(rtk git show:*)",
+      "Bash(rtk git branch:*)",
+      "Bash(rtk git stash list:*)",
+      "Bash(rtk ls:*)",
+      "Bash(rtk read:*)",
+      "Bash(rtk wc:*)",
+      "Bash(rtk tree:*)",
+      "Bash(rtk mvn test:*)",
+      "Bash(rtk mvn verify:*)",
+      "Bash(rtk mvn compile:*)",
+      "Bash(rtk gradlew test:*)",
+      "Bash(rtk gradlew check:*)",
+      "Bash(rtk gradlew build:*)",
+      "Bash(rtk npm run test:*)",
+      "Bash(rtk npm run typecheck:*)",
+      "Bash(rtk npm run lint:*)",
+      "Bash(rtk pytest:*)",
+      "Bash(rtk ruff check:*)",
+      "Bash(rtk mypy:*)",
+      "Bash(rtk go test:*)",
+      "Bash(rtk go vet:*)",
+      "Bash(rtk go build:*)",
+      "Bash(rtk docker ps:*)",
+      "Bash(rtk docker compose ps:*)",
+      "Bash(rtk docker compose logs:*)",
+      "Bash(rtk hook check:*)"
     ],
     "deny": [
       "Read(**/.env)",
@@ -78,6 +106,11 @@
           {
             "type": "command",
             "command": "/Users/simongirard/.claude/hooks/bash-guard.py",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "/Users/simongirard/.claude/hooks/rtk-rewrite.sh",
             "timeout": 10
           }
         ]
