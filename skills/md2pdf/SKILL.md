@@ -27,7 +27,7 @@ The script is the single source of truth for the build. It:
 - appends `assets/code-wrap.lua` (`fvextra`) on every build so long code lines
   wrap instead of being silently clipped at the page edge;
 - renders ` ```mermaid ` blocks to vector diagrams when the source contains
-  them, finding `mermaid-filter` even under an nvm-managed node;
+  them, via `mermaid-filter`;
 - fails with an actionable install hint when pandoc or TeX is missing — relay
   that hint to the user instead of working around it.
 

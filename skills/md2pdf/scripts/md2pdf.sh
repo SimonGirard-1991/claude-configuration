@@ -127,12 +127,6 @@ fi
 # formatting bug to the reader and passes every automated check. Refuse instead.
 FILTER=()
 if grep -qE '^[[:space:]]*```+[[:space:]]*mermaid\b' "$INPUT"; then
-  if ! command -v mermaid-filter >/dev/null 2>&1; then
-    # nvm-managed installs are not on a non-interactive shell's PATH.
-    for dir in "$HOME"/.nvm/versions/node/*/bin; do
-      [[ -x "$dir/mermaid-filter" ]] && { export PATH="$dir:$PATH"; break; }
-    done
-  fi
   if command -v mermaid-filter >/dev/null 2>&1; then
     FILTER=(-F mermaid-filter)
     export MERMAID_FILTER_FORMAT="${MERMAID_FILTER_FORMAT:-pdf}"  # vector, for LaTeX

@@ -16,11 +16,14 @@
 # - All PreToolUse hooks run in parallel on the ORIGINAL input; most
 #   restrictive decision wins, so bash-guard.py's ask/deny cannot be bypassed
 #   by a rewrite.
-# - Paths are pinned deliberately: a PATH-resolved `rtk` can be shadowed (npm
-#   publishes an unrelated package named rtk, and the nvm bin dir precedes
-#   Homebrew's in the hook PATH); /usr/bin/jq ships with macOS. On a machine
-#   where either path is absent the script silently no-ops (fail-open) and
-#   commands run unrewritten under normal permission flow.
+# - Paths are pinned deliberately, and stay pinned even though ~/.zshenv now
+#   gives every shell a correct PATH. Two independent reasons: npm publishes an
+#   unrelated package named `rtk`, so a PATH-resolved lookup is shadowable by
+#   any global npm install; and a hook is spawned by Claude Code, not by a
+#   login shell, so it must not assume any profile was ever read. /usr/bin/jq
+#   ships with macOS. On a machine where either path is absent the script
+#   silently no-ops (fail-open) and commands run unrewritten under normal
+#   permission flow.
 #
 # Fail-open contract (mirrors bash-guard.py): no output + exit 0 = no rewrite.
 # rtk absent, garbage output, or a jq error all resolve to that. No inner
