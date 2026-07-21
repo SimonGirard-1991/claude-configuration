@@ -95,7 +95,7 @@ The deliverable that everything else hangs on. Structure:
 8. **Phasing** — MVP vs later phases. The MVP cut is a product decision: the thinnest slice that produces real business value, not a demo.
 9. **Calibration tier** — see below.
 
-Write scoping documents as pandoc-ready Markdown files so the existing LuaLaTeX pipeline can produce the client PDF. Internal versions are blunt; client-facing versions go through the `client-comms` register.
+Write scoping documents as pandoc-ready Markdown files, then build the client PDF with the `md2pdf` skill (`~/.claude/skills/md2pdf/scripts/md2pdf.sh <file>.md`) rather than a hand-rolled pandoc command. Internal versions are blunt; client-facing versions go through the `client-comms` register.
 
 ## Calibration tier — the hand-off to the technical agents
 
