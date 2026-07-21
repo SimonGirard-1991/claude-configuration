@@ -24,6 +24,10 @@ The script is the single source of truth for the build. It:
   to match the installed pandoc;
 - keeps LuaLaTeX with its default Latin Modern fonts — broad unicode coverage
   (arrows, math), where macOS system fonts render missing-glyph boxes;
+- appends `assets/code-wrap.lua` (`fvextra`) on every build so long code lines
+  wrap instead of being silently clipped at the page edge;
+- renders ` ```mermaid ` blocks to vector diagrams when the source contains
+  them, finding `mermaid-filter` even under an nvm-managed node;
 - fails with an actionable install hint when pandoc or TeX is missing — relay
   that hint to the user instead of working around it.
 
@@ -44,6 +48,45 @@ The input must be pandoc-ready (learning-doc-writer output already is):
   why this one goes unnoticed. Check the rendered links, not the exit code.
 - Fenced code blocks need language tags to get colours.
 - No smart quotes pasted in from web copy (a frequent silent breakage).
+
+## Diagrams
+
+Use ` ```mermaid ` blocks — `classDiagram` (UML, with `<<interface>>` stereotypes
+and `Type~R~` generics), `sequenceDiagram`, `stateDiagram-v2`, `flowchart`. The
+script renders them as vector PDF via `mermaid-filter` (npm), the same pipeline
+as `~/Documents/WorkTemplate/SystemDesign/build-pdfs.sh`. Reserve ASCII art for
+what Mermaid renders worse: memory layouts, wire formats, column-aligned tables.
+
+If the source has mermaid blocks and `mermaid-filter` is missing, the script
+**refuses to build**. That is deliberate: pandoc's own behaviour is to render
+the diagram as literal source, which passes every automated check and looks like
+a formatting bug to the reader. Install it (`npm install -g mermaid-filter`) or
+pass `--no-mermaid` to accept unrendered diagrams knowingly.
+
+## The failures here are silent — verify by looking
+
+This pipeline's characteristic bugs all produce an exit-0 build and a plausible
+PDF. **After any build of a code- or diagram-heavy document, rasterise a page
+and actually look at it:**
+
+```bash
+pdftoppm -png -r 110 -f 7 -l 7 doc.pdf out   # then read out-07.png
+```
+
+Known silent modes, and who guards them now:
+
+| Symptom | Cause | Guard |
+|---|---|---|
+| Code clipped at page edge | LaTeX warns on over-wide prose, never on code blocks | script appends `fvextra` |
+| Diagram appears as source text | `mermaid-filter` absent | script refuses to build |
+| Links in the wrong colour | escaped `linkcolor` (see above) | nothing — check by eye |
+| Document's `header-includes` vanishes | `pandoc -H` **overrides** YAML `header-includes` rather than appending | script uses `--lua-filter`, never `-H` |
+
+That last row is why the wrapping ships as a Lua filter that appends to
+`header-includes`. Adding it with `--include-in-header` deleted the document's
+own preamble — caught only because a `\definecolor` disappeared and the build
+failed loudly. A document without a custom colour would have lost its preamble
+silently. **Never add preamble content to this pipeline with `-H`.**
 
 ## Troubleshooting
 

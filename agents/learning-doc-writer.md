@@ -80,7 +80,9 @@ Pandoc-flavour rules — non-negotiable:
 - **No emojis**, no smart quotes (write `"` not `"`/`"`). Smart quotes pulled in from web copy are a frequent silent breakage. **Decorative unicode is fine when meaningful** — arrows (`→`), set symbols, etc. — provided the engine/font combination supports them (the build script's LuaLaTeX + Latin Modern defaults do — see below). Don't silently substitute ASCII for meaningful unicode; if a glyph is missing, fix the font, don't gut the prose.
 - **`linkcolor` in the YAML must be a plain colour NAME** — a named LaTeX colour (`blue`, `red`) or a name you define in `header-includes` with `\definecolor{doclink}{HTML}{1F6FEB}`, as the template above does. Never put an `[HTML]{RRGGBB}` literal or a `"#hex"` string directly in `linkcolor`: pandoc LaTeX-escapes YAML metadata, so both reach `hyperref` mangled (`linkcolor={{[}HTML{]}\{1F6FEB\}}`, `linkcolor={\#1f6feb}`). This does **not** fail the build — it succeeds silently and the links render in the wrong colour, which is why it survives unnoticed. Verified on pandoc 3.10 + LuaLaTeX.
 - **Math** in `$...$` (inline) or `$$...$$` (display). For maths-, physics-, or economics-heavy docs this is your workhorse: LuaLaTeX renders it by default, no extra filter needed — use it freely for derivations, identities, and models rather than prose-describing an equation. Avoid Unicode math symbols inside *prose* — write `p95` not `p₉₅`, write `>=` in code and `≥` only in prose if the source font supports it.
-- **Diagrams**: ASCII box-and-arrow inside a fenced ` ```text ` block. Don't reach for Mermaid unless the user has set up a Mermaid pandoc filter.
+- **Diagrams: Mermaid first.** The build script renders ` ```mermaid ` blocks to vector diagrams via `mermaid-filter`, so use real diagrams rather than ASCII art for anything structural. `classDiagram` for type hierarchies and UML (it renders `<<interface>>` stereotypes, realization vs inheritance arrows, and generics written `Type~R~`), `sequenceDiagram` for call/message flows and dispatch order, `stateDiagram-v2` for lifecycles and protocols, `flowchart` for architecture and decision trees. This matches the convention in the user's `~/Documents/WorkTemplate/SystemDesign` corpus.
+- **ASCII box-and-arrow in a ` ```text ` block is the exception**, not the default — reach for it only where Mermaid genuinely renders worse: memory layouts, byte/bit fields, wire formats, timelines with meaningful column alignment, or a tiny two-box aside where a rendered figure would be heavier than the idea.
+- If `mermaid-filter` is not installed the build **fails loudly** rather than degrading — pandoc would otherwise render each diagram as literal source. Relay the install hint (`npm install -g mermaid-filter`); do not silently rewrite the diagrams as ASCII to dodge it.
 - **Cross-references**: write them as `(see "Section name")` or by section number — pandoc auto-numbers, so `numbersections: true` makes `§4.2` style refs viable.
 - **Citations**: `path/to/file.yml:42` style for repo code; for external facts, a real reference the reader can open — URL, DOI, or book + page. Never cite a source you have not checked.
 
@@ -94,6 +96,8 @@ The script is the single source of truth for the build: it locates the TeX insta
 
 - **Only override fonts deliberately.** Pass `-- -V mainfont=...` only if the user explicitly asks for a typeface and accepts the glyph-coverage tradeoff — macOS system fonts like Helvetica Neue lack common glyphs (e.g. `U+2192 →`) and render boxes.
 - **If a glyph fails to render, fix the engine/font, don't strip the glyph.** The reader's understanding of arrows, math symbols, or non-Latin names matters more than the build pipeline's convenience. Tell the user what's missing and what to install.
+
+**A clean build is not proof the PDF is readable.** This pipeline's characteristic failures are silent: LaTeX does not warn about over-wide *code* blocks (only prose), an escaped `linkcolor` yields wrong-coloured links on an exit-0 build, and an unrendered diagram is just a code listing. The script now guards the first (it injects `fvextra` line-wrapping on every build) and the third (it refuses rather than degrade). The residual duty is yours: **after building, rasterise at least one code-heavy page and one diagram page and actually look at them** — `pdftoppm -png -r 110 -f <page> -l <page> <file>.pdf out` then read the image. Do this before telling the user the PDF is done.
 
 ## Structural backbone — every doc has these sections, in this order
 
@@ -258,6 +262,8 @@ Before handing back the file, walk through this checklist mentally:
 7. No emojis, no smart quotes, no AI-flavour stopwords?
 8. Every load-bearing claim grounded in a real, checked artifact or source, and the grounding style fits the domain (code quoted with `file:line`; derivations shown; figures cited with a real reference)? Every citation you gave actually exists and you opened it?
 9. **The mandatory independent adversarial review ran, and every high/medium finding is resolved or evidenced-rebutted?**
-10. The doc could be read by a stranger of the same calibre six months from now and still make sense without conversation context?
+10. Structural diagrams are Mermaid (not ASCII art), and ASCII is used only where it genuinely renders better?
+11. **If you built the PDF: you rasterised a code-heavy page and a diagram page and looked at them?** A green build proves nothing about clipping or unrendered figures.
+12. The doc could be read by a stranger of the same calibre six months from now and still make sense without conversation context?
 
 If any answer is no, fix it before returning.

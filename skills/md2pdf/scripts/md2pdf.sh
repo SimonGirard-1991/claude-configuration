@@ -17,12 +17,21 @@
 #     standard install locations instead of requiring callers to know that.
 #   - pandoc 3.9 renamed --highlight-style to --syntax-highlighting; we
 #     detect which flag the installed pandoc supports.
+#   - LaTeX does not warn about over-wide CODE blocks (only prose), so long
+#     listing lines are silently clipped at the page edge on an exit-0 build.
+#     assets/code-wrap.tex is injected on every build to force wrapping.
+#   - ```mermaid blocks need mermaid-filter, else pandoc silently renders them
+#     as literal source. We detect the blocks and refuse rather than degrade.
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+WRAP_FILTER="$SCRIPT_DIR/../assets/code-wrap.lua"
 
 STYLE="tango"
 ENGINE="lualatex"
 DRY_RUN=0
+NO_MERMAID=0
 INPUT=""
 OUTPUT=""
 EXTRA=()
@@ -37,6 +46,8 @@ Options:
   -s, --style NAME    syntax-highlighting style (default: tango)
   -e, --engine NAME   PDF engine (default: lualatex)
   -n, --dry-run       print the pandoc command without running it
+      --no-mermaid    build even if ```mermaid blocks cannot be rendered
+                      (they come out as literal source — use knowingly)
   -h, --help          show this help
 
 Arguments after `--` are passed to pandoc verbatim,
@@ -59,6 +70,8 @@ while [[ $# -gt 0 ]]; do
       ENGINE="$2"; shift 2 ;;
     -n|--dry-run)
       DRY_RUN=1; shift ;;
+    --no-mermaid)
+      NO_MERMAID=1; shift ;;
     -h|--help)
       usage; exit 0 ;;
     --)
@@ -109,8 +122,36 @@ else
   highlight_flag="--highlight-style=$STYLE"
 fi
 
+# ```mermaid blocks need mermaid-filter (npm). Without it pandoc does not fail
+# — it renders the diagram as a literal code listing, which looks like a
+# formatting bug to the reader and passes every automated check. Refuse instead.
+FILTER=()
+if grep -qE '^[[:space:]]*```+[[:space:]]*mermaid\b' "$INPUT"; then
+  if ! command -v mermaid-filter >/dev/null 2>&1; then
+    # nvm-managed installs are not on a non-interactive shell's PATH.
+    for dir in "$HOME"/.nvm/versions/node/*/bin; do
+      [[ -x "$dir/mermaid-filter" ]] && { export PATH="$dir:$PATH"; break; }
+    done
+  fi
+  if command -v mermaid-filter >/dev/null 2>&1; then
+    FILTER=(-F mermaid-filter)
+    export MERMAID_FILTER_FORMAT="${MERMAID_FILTER_FORMAT:-pdf}"  # vector, for LaTeX
+  elif [[ "$NO_MERMAID" -eq 1 ]]; then
+    printf 'md2pdf: warning: mermaid-filter not found; diagrams will render as literal source\n' >&2
+  else
+    die "input has \`\`\`mermaid blocks but mermaid-filter is not installed.
+Without it pandoc silently renders each diagram as a code listing.
+Install it:  npm install -g mermaid-filter
+Or pass --no-mermaid to build anyway, accepting unrendered diagrams."
+  fi
+fi
+
+# Appended via a Lua filter, NOT --include-in-header: -H overrides the
+# document's own YAML header-includes instead of appending to it.
+[[ -f "$WRAP_FILTER" ]] || die "missing bundled filter: $WRAP_FILTER"
+
 set -- pandoc "$INPUT" -o "$OUTPUT" --pdf-engine="$ENGINE" "$highlight_flag" \
-  ${EXTRA[@]+"${EXTRA[@]}"}
+  --lua-filter="$WRAP_FILTER" ${FILTER[@]+"${FILTER[@]}"} ${EXTRA[@]+"${EXTRA[@]}"}
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   printf '%q ' "$@"
@@ -119,4 +160,9 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
 fi
 
 "$@"
+
+# mermaid-filter drops an empty error log in the working directory; clean it up
+# so it does not accumulate, but keep it if it actually captured something.
+[[ -f mermaid-filter.err && ! -s mermaid-filter.err ]] && rm -f mermaid-filter.err
+
 printf 'md2pdf: wrote %s\n' "$OUTPUT"
