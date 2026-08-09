@@ -93,7 +93,7 @@
       "Read(**/id_rsa*)",
       "Read(**/id_ed25519*)"
     ],
-    "defaultMode": "default"
+    "defaultMode": "auto"
   },
   "model": "opus[1m]",
   "hooks": {
@@ -137,5 +137,6 @@
   },
   "effortLevel": "xhigh",
   "tui": "fullscreen",
-  "preferredNotifChannel": "iterm2_with_bell"
+  "preferredNotifChannel": "iterm2_with_bell",
+  "skipWorkflowUsageWarning": true
 }
