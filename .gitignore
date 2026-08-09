@@ -7,11 +7,14 @@ agent-memory/
 projects/
 history/
 sessions/
+session-env/
 history.jsonl
 todos/
 tasks/
 plans/
 statsig/
+usage-data/
+downloads/
 
 backups/
 cache/
@@ -41,8 +44,12 @@ mcp-needs-auth-cache.json
 .last-update-result.json
 
 settings.local.json
+.claude/
 .claude.json
 .claude.json.backup*
+
+__pycache__/
+*.py[cod]
 
 *.log
 logs/
