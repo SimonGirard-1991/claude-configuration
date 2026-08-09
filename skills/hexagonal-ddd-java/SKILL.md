@@ -11,6 +11,14 @@ This skill covers **the rules**. For code-ready scaffolding templates, see the `
 
 ## First decide: do you need hexagonal at all?
 
+**This gate is about layering only.** It decides whether a component gets the
+hexagon. It does **not** apply to boundary questions — whether two things are one
+bounded context or two, and whether a module should become its own service. Those
+are answered in `references/multi-bounded-context.md` regardless of how the
+component is layered, and the fault-isolation driver in particular exists precisely
+to justify extracting a CRUD-shaped module. If that is the question, skip this gate
+and open that reference.
+
 Before applying anything else in this skill, check:
 
 - Does this component enforce business invariants that must survive framework/DB changes? → **yes**: use hexagonal.
@@ -47,56 +55,20 @@ Dependencies point inward: `infrastructure → application → domain`. **The do
 - `application/` imports from `domain/` only.
 - `domain/` imports no application, infrastructure, framework, persistence, messaging, or transport code. It may use the JDK and carefully selected framework-free libraries.
 
-## Single bounded context — layer rules
+## Reference map
 
-### `domain/` — pure business
+Open a reference when you need the detailed layer contract or the multi-context
+topology. Boundary decisions — is this one bounded context or two, should this
+module become its own service — are answered in
+`references/multi-bounded-context.md`, not from this file.
 
-Contains:
-- **Aggregates** — consistency boundary, one root per transaction. Aggregates enforce invariants that belong to their consistency boundary. Cross-aggregate policies are coordinated by application services or domain services through ports. Do not put aggregate-local invariants in application services.
-- **Value Objects** — immutable, equality by value (`Money`, `Email`, `AccountId`). Prefer `record` in modern Java.
-- **Entities** — identity-based, mutable inside their aggregate.
-- **Domain Events** — past-tense facts (`FundsCredited`, `OrderShipped`). Sealed interface + records is idiomatic.
-- **Domain Services** — stateless operations that don't naturally belong to an aggregate (e.g., a pricing calculation spanning multiple aggregates). Do not overuse — most logic belongs in the aggregate.
-- **Exceptions** — invariant violations (`InsufficientFunds`, `OrderAlreadyShipped`).
+| I need to… | Open | Contains |
+|---|---|---|
+| Know exactly what belongs in `domain/`, `application/`, `infrastructure/` | `references/layer-rules.md` | Per-layer contents and prohibitions, port placement, framework-specific notes (Spring/Quarkus/Micronaut) |
+| Identify or split bounded contexts; design integration between them; decide whether to extract a module into its own service | `references/multi-bounded-context.md` | BC identification heuristics, module topology, Context Map patterns, inter-BC communication rules, domain vs integration events, service-extraction drivers including fault isolation |
 
-Forbidden in `domain/`:
-- `@Service`, `@Component`, `@Autowired`, `@Entity`, `@Transactional`, or any framework annotation.
-- `jakarta.persistence.*`, `org.springframework.*`, JDBC, Jackson, HTTP types.
-- Static singletons, global state, `System.currentTimeMillis()` (inject a `Clock`).
-- Logging frameworks — domain code doesn't log, it returns results.
-
-Rule of thumb: the `domain/` package must compile with only the JDK + a handful of pure Java libs (e.g., a validation lib, a money lib). If you need to add a framework dep to make it compile, you've leaked infrastructure into the model.
-
-### `application/` — use cases, ports, and commands
-
-Contains:
-- **Application Services / Use Cases** — one class per use case, or grouped by aggregate. Orchestrates: load aggregate → invoke domain method → persist → publish. This layer owns the *transaction*.
-- **Commands** — intent records (`OpenAccount`, `ShipOrder`) arriving from the outside. Live in `application/`, not `domain/`. Rationale: a command represents intent from an external caller (a controller, a message listener), which is an application-layer concern. Keeping them out of `domain/` preserves the domain as the pure invariant-enforcement layer.
-- **Ports** — interfaces the application needs from the outside world. Names are domain-oriented, not technology-oriented: `AccountRepository`, not `AccountJpaRepository`; `PaymentGateway`, not `StripeClient`.
-- **DTOs for use case input/output** — optional. Some teams expose commands directly; others wrap them. Either works, but pick one convention per codebase.
-
-Ports come in two shapes:
-- **Driving ports** (inbound) — what the application offers to the outside (`AccountApplicationService` is itself a driving port, or you extract an interface for it).
-- **Driven ports** (outbound) — `AccountRepository`, `EmailSender`, `PaymentGateway`. Use `java.time.Clock` directly when time is needed; do not wrap it in a custom port unless there is a concrete reason.
-
-### `infrastructure/` — adapters
-
-Contains:
-- **Driving adapters** — REST controllers, message listeners, CLI handlers, GraphQL resolvers. They translate external requests into commands and call the application layer.
-- **Driven adapters** — repositories (JPA, jOOQ, Mongo), HTTP clients to external APIs, message producers, email senders. Each implements a port defined in `application/`.
-- **Mappers** — explicit classes for DTO↔domain conversion. One class per direction is the clearest convention (`AccountRequestMapper`, `AccountResponseMapper`). Avoid bidirectional mappers — they hide coupling.
-- **Config** — Spring `@Configuration`, Quarkus producers, Micronaut factories live here, not in the domain.
-
-Rule: an adapter can import from `application/` (to see the port it implements) and `domain/` (to construct/consume domain types). It must never be imported *from* `application/` or `domain/`.
-
-### Framework-specific notes
-
-- **Spring Boot**: `@Service` on application services, `@Repository` on infra adapters, `@RestController` on web adapters, `@ConfigurationProperties` for config. Use constructor injection only.
-- **Quarkus**: `@ApplicationScoped` for services and adapters. Avoid `@Inject` field injection.
-- **Micronaut**: `@Singleton` on application services and adapters.
-- **Plain Java**: wire dependencies manually in a `main()` or composition root. The `domain/` and `application/` packages stay identical — only `infrastructure/` changes shape.
-
-The layering rules are the same across frameworks. Only the annotations differ.
+For code-ready templates (aggregate, use case, adapter, tests), load the
+`hexagonal-module-bootstrap` skill instead — this skill explains, that one executes.
 
 ## Validation responsibilities
 
@@ -114,94 +86,6 @@ A use case normally defines one transaction boundary. Do not keep a database tra
 
 Queries that do not enforce invariants may use read models or projections directly through application ports. Do not load aggregates only to render list/detail/search screens. Aggregates are for protecting consistency, not for generic data retrieval.
 
-## Multi bounded context
-
-Single-BC rules scale up to multi-BC by treating each BC as a self-contained hexagon with its own `domain`/`application`/`infrastructure`, plus explicit rules for *how BCs talk to each other*.
-
-### Identifying a bounded context
-
-A BC is delimited by a *coherent ubiquitous language*. You are probably crossing a BC boundary when:
-- The same word means different things (`Customer` in Billing is a payment profile; in Shipping it's an address + preferences).
-- The invariants change (an Order in Sales cares about pricing; in Fulfillment it cares about pickability).
-- The stakeholders change (Billing talks to Finance; Catalog talks to Merchandising).
-- Different release cadences, different teams, or different compliance scopes.
-
-If two "things" share a name but diverge on any of the above, they are *different concepts* in different BCs, not one shared concept.
-
-### Module topology
-
-One BC = one top-level package = one module. In Spring Modulith:
-
-```
-com.company.app
-├── billing/                 @ApplicationModule(type = CLOSED, allowedDependencies = {"shared"})
-│   ├── domain/
-│   ├── application/
-│   ├── infrastructure/
-│   └── api/                 explicitly public — the only package other BCs may import
-├── shipping/                @ApplicationModule(type = CLOSED, allowedDependencies = {"shared", "billing::api"})
-│   └── ... (full hexagon)
-├── catalog/                 @ApplicationModule(type = CLOSED)
-│   └── ... (full hexagon)
-└── shared/                  @ApplicationModule(type = OPEN)
-    └── (minimal: Clock, Json config, Ids, cross-cutting tech only — NEVER domain concepts)
-```
-
-Without Spring Modulith, enforce the same rules with ArchUnit:
-```java
-noClasses().that().resideInAPackage("..billing.domain..")
-    .should().dependOnClassesThat().resideInAnyPackage("..shipping..", "..catalog..");
-```
-
-### Context Map — which pattern, when
-
-| Pattern | Use when | Concrete Java shape |
-|---|---|---|
-| **Shared Kernel** | Concept is *truly* universal and changes rarely (`Money`, `Clock`, tenant `UserId`) | A `shared` module, deliberately minimal. Defend its minimalism — every addition is contagion. |
-| **Customer / Supplier** | Downstream BC depends on a cooperative upstream | Upstream exposes an `api/` package; downstream imports only that |
-| **Conformist** | Downstream consumes an upstream it cannot influence | Same as above, downstream accepts upstream's model as-is |
-| **Anti-Corruption Layer (ACL)** | Upstream's model would pollute downstream | `infrastructure/acl/` package: client + translator → local domain types |
-| **Open Host Service + Published Language** | Multiple consumers, stable contract needed | Versioned API (OpenAPI for sync, Avro/JSON Schema for async events) |
-| **Separate Ways** | Two BCs have no real reason to integrate | No dependency. This is a *valid* choice — resist the urge to integrate. |
-
-### Inter-BC communication rules
-
-**Synchronous**:
-- Call the upstream BC *only* through its `api/` package (or equivalent public facade).
-- Never import from another BC's `domain/` or `infrastructure/`.
-- The API package exposes DTOs or command/query types, never aggregates.
-
-**Asynchronous**:
-- The source BC raises domain events internally and maps publishable facts to integration events.
-- Other BCs consume integration events, not the source BC's internal domain events.
-- The target BC translates external events into its own commands through an ACL. The target never treats the source's event as a native domain event.
-- Event schemas are a *published language* — version them, evolve them additively.
-- Use a transactional outbox when event publication must be consistent with state changes.
-- Message handlers must be idempotent. Store processed message IDs or use natural idempotency keys when handling integration events.
-
-**Database**:
-- Each BC owns its tables. At minimum, separate Postgres schemas per BC; ideally separate databases.
-- Never share entities, never join across BCs at the database level. If you need data from another BC, go through its API or consume its events into your own read model.
-
-**Shared code**:
-- `shared` module is for *technical* cross-cutting only: `Clock`, JSON config, ID generation strategy, exception base classes.
-- It is *never* for domain concepts. If two BCs both have `Customer`, they are two different `Customer` classes in two different packages. This feels wasteful; it is not.
-
-### Domain events vs integration events
-
-- Domain events are internal facts raised inside one bounded context.
-- Integration events are versioned contracts published to other bounded contexts or external systems.
-- Map domain events to integration events in application/infrastructure.
-- Do not expose aggregate classes or internal domain events as public inter-BC contracts.
-
-### Anti-patterns to refuse
-
-- **"Extract Customer to shared"** when each BC has a different view of Customer → create `billing.domain.Customer` and `shipping.domain.Customer`, distinct, with only the identifier in common (possibly in `shared`).
-- **Cyclic dependencies between BCs** → the boundary is wrong, not the rule. Redraw the map (often by extracting a third BC, or by flipping a direction via events).
-- **Consuming an external/legacy system without an ACL** → the foreign model will bleed into your domain within weeks.
-- **One database schema for all BCs** → eventually someone joins across BCs "just this once" and the boundary is gone.
-- **"Let's just put it in shared for now"** → `shared` has no brakes. Every addition needs explicit justification, or the modular monolith degrades into a big ball of mud with extra annotations.
-
 ## Testing
 
 Full testing strategy by layer lives in the `java-testing-strategy` skill. The non-negotiable minimum for hexagonal:
@@ -217,6 +101,8 @@ Before approving a change, verify:
 
 **Layering**
 - [ ] No framework annotation or infra import in `domain/`.
+- [ ] No ambient time or randomness in `domain/` — `System.currentTimeMillis()`, `LocalDate.now()`, `new Random()` and static singletons are out; inject a `Clock` (or the value) so invariants stay testable with `Clock.fixed()`.
+- [ ] No logging framework in `domain/` — domain code does not log. Emit a domain event or let the application layer log the outcome.
 - [ ] Every port is an interface in `application/`, implemented in `infrastructure/`.
 - [ ] Mappers DTO↔domain are explicit and one-directional.
 - [ ] No `@Transactional` in `domain/`; transactions live in `application/`.
@@ -238,6 +124,16 @@ Before approving a change, verify:
 **Tests**
 - [ ] Domain tests run without Spring.
 - [ ] Architecture rules are enforced by an automated test.
+
+## Anti-patterns to refuse — multi-BC
+
+These are refusals, not preferences.
+
+- **"Extract Customer to shared"** when each BC has a different view of Customer → create `billing.domain.Customer` and `shipping.domain.Customer`, distinct, with only the identifier in common (possibly in `shared`).
+- **Cyclic dependencies between BCs** → the boundary is wrong, not the rule. Redraw the map (often by extracting a third BC, or by flipping a direction via events).
+- **Consuming an external/legacy system without an ACL** → the foreign model will bleed into your domain within weeks.
+- **One database schema for all BCs** → eventually someone joins across BCs "just this once" and the boundary is gone.
+- **"Let's just put it in shared for now"** → `shared` has no brakes. Every addition needs explicit justification, or the modular monolith degrades into a big ball of mud with extra annotations.
 
 ## Common mistakes and how to push back
 
