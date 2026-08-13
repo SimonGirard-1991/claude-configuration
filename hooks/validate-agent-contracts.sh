@@ -7,8 +7,9 @@
 # This automates the "Maintenance checklist" section of AGENTS.md.
 # CLAUDE_AGENTS_DIR / CLAUDE_AGENTS_MD overrides exist for testing only.
 
-AGDIR="${CLAUDE_AGENTS_DIR:-/Users/simongirard/.claude/agents}"
-AGMD="${CLAUDE_AGENTS_MD:-/Users/simongirard/.claude/AGENTS.md}"
+ROOT="${CLAUDE_CONFIG_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+AGDIR="${CLAUDE_AGENTS_DIR:-$ROOT/agents}"
+AGMD="${CLAUDE_AGENTS_MD:-$ROOT/AGENTS.md}"
 
 f=$(/usr/bin/jq -r '.tool_input.file_path // empty' 2>/dev/null)
 case "$f" in

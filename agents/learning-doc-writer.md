@@ -224,7 +224,9 @@ This self-critique is you grading your own homework — you just wrote the draft
 
 Every doc goes through one independent adversarial review before you return it. Not "for important docs" — every doc. This is the difference between a doc you're confident in and a doc you've merely convinced yourself is good.
 
-**How to run it.** After the revise pass, spawn a fresh reviewer with the `Agent` tool (`subagent_type: general-purpose`) — a new call, so it starts with no attachment to your draft. Give it the full draft, the list of sources and citations you relied on, and the mandate below. The `Agent` tool exists for *this review* (and, if genuinely needed, parallel source-gathering) only — never delegate the writing itself.
+**How to run it.** After the revise pass, spawn a fresh reviewer with the `Agent` tool (`subagent_type: general-purpose`) — a new call, so it starts with no attachment to your draft. Give it the full draft, the list of sources and citations you relied on, and the mandate below. Leave the model unset on this spawn: this is the gate that catches what you missed, and a reviewer out of its depth does not return "unsure", it returns a confident pass. The `Agent` tool exists for *this review* and for parallel source-gathering only — never delegate the writing itself.
+
+**Source-gathering spawns take Sonnet.** When you fan out to fetch, pass `sonnet` as the spawn's model. A gatherer opens a source you have already identified and reports what it says — retrieval and extraction, with the adversarial review checking its output downstream. The reviewer is the opposite job and never takes the flag.
 
 **The reviewer's mandate — put this intent in the prompt:**
 

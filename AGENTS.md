@@ -92,7 +92,11 @@ for all pairs unless noted; "the architect" / "the reviewer" mean whichever pair
 
 8. **Comment doctrine**: each of the three code-writing agents carries the section
    `## Comments — the default is none`, identical wording in all three — it is one
-   rule stated three times, not three rules. Both reviewers carry the matching
+   rule stated three times, not three rules. Since 2026-08-13 `~/.claude/CLAUDE.md`
+   § Code comments states it a fourth time, at user scope. The agent copies stay
+   regardless: only they are validated, and README's standing instruction is to keep
+   CLAUDE.md minimal, so that copy is one trim away from vanishing silently. Both
+   reviewers carry the matching
    **Comment noise** bullet in their code-level layer, which is what makes the
    self-review loop enforce it rather than merely assert it. Keep the two halves
    together: with the doctrine alone, breaches ship unopposed; with the reviewer
@@ -168,6 +172,17 @@ When editing `AGENTS.md` itself:
 ---
 
 ## Decisions
+
+- **Fetch-only spawns take Sonnet; judgment spawns never do** (decided 2026-08-13).
+  Every agent here stays `model: opus`, and that is not an oversight — the mechanical
+  work already left the model layer entirely (both hook validators, `scripts/lint_skills.py`,
+  the md2pdf build script, the quiz builder), so the residue left to the agents is
+  uniformly judgment. The one exception is a sub-agent that opens an
+  already-identified source and reports what it says: `learning-doc-writer`'s parallel
+  source-gathering, the only such spawn in the tree today. Both reviewers are excluded
+  in every loop — a reviewer out of its depth does not return "unsure", it returns a
+  confident ✅, and it is the last gate before work ships. Test any new spawn the same
+  way: is the answer sitting in the source, or does someone have to judge it?
 
 - **Comments default to none in generated code** (decided 2026-08-11; surface 8).
   The agents were over-commenting badly — narration on obvious code, rationale

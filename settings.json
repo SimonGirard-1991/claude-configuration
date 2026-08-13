@@ -96,6 +96,11 @@
     "defaultMode": "auto"
   },
   "model": "opus[1m]",
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
+  },
   "hooks": {
     "PreToolUse": [
       {
@@ -132,6 +137,11 @@
             "type": "command",
             "command": "/Users/simongirard/.claude/hooks/validate-skill-tree.sh",
             "timeout": 20
+          },
+          {
+            "type": "command",
+            "command": "/Users/simongirard/.claude/hooks/validate-readme.sh",
+            "timeout": 15
           }
         ]
       }
