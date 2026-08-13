@@ -33,14 +33,11 @@ public record PlaceOrder(UUID customerId, List<Line> lines) {
     lines = List.copyOf(lines);
   }
 
-  // Lightweight DTO used by the command only.
-  // Rule: identity generation (OrderLine.id) is NOT the adapter's concern.
-  // Lines arrive ID-less; the domain or application assigns IDs.
   public record Line(String sku, int quantity, BigDecimal unitPrice, String currency) {}
 }
 ```
 
-Commands are records. They represent *intent from the outside*. Validate shape here; validate *business invariants* in the domain. Keep domain types (`OrderLine`, `Money`) out of commands — those conversions happen inside the service, which is also the right place to assign domain identities.
+Commands are records. They represent *intent from the outside*. Validate shape here; validate *business invariants* in the domain. Keep domain types (`OrderLine`, `Money`) out of commands — those conversions happen inside the service, which is also the right place to assign domain identities. `Line` is a lightweight DTO belonging to the command alone, and it carries no id: identity generation is not the adapter's concern, so lines arrive ID-less and the domain or application assigns them.
 
 ## Outbound ports
 
@@ -78,13 +75,6 @@ package com.company.ecom.order.application.port;
 
 import com.company.ecom.order.domain.event.OrderEvent;
 
-// Rule: events committed atomically with aggregate state.
-// The port is named "outbox" (not "publisher") to prevent the naive
-// "publish to Kafka inside the transaction" implementation from looking correct.
-// A concrete outbox implementation persists to a table in the same transaction;
-// a separate relay process reads that table and publishes to the broker.
-// A direct Kafka publisher is acceptable only if losing an event on broker failure
-// is tolerable for your domain — rarely the case.
 public interface OrderEventOutbox {
   void record(OrderEvent event);
 }
@@ -93,6 +83,7 @@ public interface OrderEventOutbox {
 Port naming rules:
 - **Domain-oriented, not technology-oriented**: `OrderRepository`, not `OrderJooqRepository`; `PaymentGateway`, not `StripeClient`.
 - If you rename a port to match its implementation, it's a sign the port is leaking tech.
+- **`OrderEventOutbox`, not `OrderEventPublisher`** — the name is load-bearing. Events must commit atomically with aggregate state, so an implementation persists to a table inside the same transaction and a separate relay publishes from it after commit. Called "publisher", the naive `kafkaTemplate.send(...)`-inside-the-transaction implementation looks like it satisfies the port. A direct publisher is acceptable only where losing an event on broker failure is tolerable — rarely the case.
 
 ## Application exceptions
 
@@ -102,16 +93,14 @@ package com.company.ecom.order.application.exception;
 
 import com.company.ecom.order.domain.model.OrderId;
 
-// Thrown by OrderRepository.save(...) when an optimistic-lock conflict is detected
-// (the row was modified by another transaction since this aggregate was loaded).
-// Lives in application/, not domain/ — optimistic locking is a port/infrastructure
-// contract, not a business invariant.
 public class ConcurrentAggregateModificationException extends RuntimeException {
   public ConcurrentAggregateModificationException(OrderId id, long expectedVersion) {
     super("order %s was modified concurrently (expected version %d)".formatted(id, expectedVersion));
   }
 }
 ```
+
+`OrderRepository.save(...)` throws this when it detects an optimistic-lock conflict — the row was modified by another transaction since the aggregate was loaded. It lives in `application/` rather than `domain/` because optimistic locking is a port/infrastructure contract, not a business invariant.
 
 ## Application service
 
@@ -143,12 +132,10 @@ public class PlaceOrderService {
     this.clock = clock;
   }
 
-  // Rule: external I/O runs OUTSIDE the DB transaction.
-  // Keeps the transaction short, avoids holding locks across remote calls.
   public OrderId handle(PlaceOrder cmd) {
     var lines = cmd.lines().stream()
         .map(l -> new OrderLine(
-            UUID.randomUUID(),            // Rule: identity generated here, not in the adapter.
+            UUID.randomUUID(),
             l.sku(),
             l.quantity(),
             new Money(l.unitPrice(), Currency.getInstance(l.currency()))))
@@ -186,8 +173,6 @@ public class PlaceOrderCommitter {
     this.outbox = outbox;
   }
 
-  // Rule: short transaction, persistence + outbox only, no external I/O.
-  // Called from another bean → proxy is traversed → @Transactional is actually applied.
   @Transactional
   public void commit(Order order, OrderEvent event) {
     orderRepository.save(order);

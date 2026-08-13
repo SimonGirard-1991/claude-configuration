@@ -16,7 +16,7 @@ Code-ready templates for scaffolding hexagonal + DDD modules in Java. Pair with 
 1. Decide what you need to create.
 2. Open the matching reference file from the map below.
 3. Copy, rename, adapt. Keep the structure; change the names and the specifics.
-4. Remove any pedagogical `// Rule:` comments once the layout is clear.
+4. Read the prose around each block — that is where the rationale lives, and it is not meant to travel into your code.
 
 ## Reference map
 
@@ -53,7 +53,7 @@ Build inward-out. This keeps the domain pure and surfaces port-design questions 
 - **Prune aggressively**. A template shows what's possible; your aggregate should only contain what you need. Fewer fields, fewer methods, fewer invariants = better.
 - **Pick the right framework variant** for the target project. Default is Spring Boot 3+.
 - **jOOQ is the default persistence** in these templates. JPA is a valid alternative when its trade-offs are understood — see `db-adapter-jpa.md` for the criteria.
-- **Never copy the `// Rule:` comments into production code**. They are pedagogical anchors pointing to rules in `hexagonal-ddd-java`; delete once you've internalized them.
+- **The code blocks are comment-free on purpose — keep them that way.** Every rule, trade-off and gotcha lives in the prose around the block, never inside it, so that what you copy is what ships. Do not re-inject that prose as comments when you paste: a template's explanation is written for someone deciding *whether* to use the pattern, and it is noise to the next person reading the code that resulted. Comment only what your own code cannot say — see the comment doctrine your agent carries.
 - **Contract-first for all external APIs**. REST uses OpenAPI YAML; Kafka integration events use Avro/Protobuf + Schema Registry; gRPC uses `.proto` natively. Generated types are infrastructure — never import from `application/` or `domain/`. Code-first REST is not the default.
 
 ## Framework detection

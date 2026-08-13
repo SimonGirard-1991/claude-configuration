@@ -45,7 +45,7 @@ message GetOrderRequest { string order_id = 1; }
 message OrderLineMessage {
   string sku = 1;
   int32 quantity = 2;
-  string unit_price = 3;  // decimal string, avoids float drift
+  string unit_price = 3;
   string currency = 4;
 }
 
@@ -107,15 +107,8 @@ public class OrderGrpcService extends OrderServiceGrpc.OrderServiceImplBase {
     } catch (InvalidOrderStateException | OrderAlreadyShippedException e) {
       out.onError(Status.FAILED_PRECONDITION.withDescription(e.getMessage()).asRuntimeException());
     } catch (ConcurrentAggregateModificationException e) {
-      // ABORTED is the canonical gRPC status for "operation aborted, typically due to a
-      // concurrency issue such as a sequencer check failure" — exactly optimistic-lock.
-      // Clients should re-fetch and retry; unlike FAILED_PRECONDITION, this encodes "retry
-      // is meaningful after refreshing state".
       out.onError(Status.ABORTED.withDescription(e.getMessage()).asRuntimeException());
     } catch (IllegalArgumentException e) {
-      // Covers parsing-level failures surfaced as IAE: UUID.fromString(...),
-      // new BigDecimal(...), Currency.getInstance(...), Money scale check, etc.
-      // Without this, they bubble up as gRPC Status.UNKNOWN — misleading to callers.
       out.onError(Status.INVALID_ARGUMENT.withDescription(e.getMessage()).asRuntimeException());
     }
   }
@@ -133,6 +126,11 @@ public class OrderGrpcService extends OrderServiceGrpc.OrderServiceImplBase {
 }
 ```
 
+Two of those status mappings are choices, not conventions:
+
+- **`ABORTED` for optimistic-lock conflicts.** It is the canonical gRPC status for "operation aborted, typically due to a concurrency issue such as a sequencer check failure" — exactly this case. Unlike `FAILED_PRECONDITION`, it encodes "retry is meaningful after refreshing state", so clients know to re-fetch and retry.
+- **`IllegalArgumentException` → `INVALID_ARGUMENT`** catches the parsing-level failures that surface as IAE: `UUID.fromString(...)`, `new BigDecimal(...)`, `Currency.getInstance(...)`, the `Money` scale check. Without the catch they bubble up as `Status.UNKNOWN`, which tells the caller nothing.
+
 ## Mappers
 
 ```java
@@ -140,7 +138,6 @@ public class OrderGrpcService extends OrderServiceGrpc.OrderServiceImplBase {
 @Component
 public class PlaceOrderGrpcMapper {
   public PlaceOrder toCommand(PlaceOrderRequest req) {
-    // Rule: adapter carries wire shape only — no domain types, no ID generation.
     var lines = req.getLinesList().stream()
         .map(l -> new PlaceOrder.Line(
             l.getSku(), l.getQuantity(),
@@ -177,6 +174,7 @@ public class OrderGrpcResponseMapper {
 ## Notes
 
 - **Generated proto types stay in `infrastructure/grpc/`**. Never import them from `application/` or `domain/`.
+- **The mappers carry wire shape only** — no domain types cross into them, and they never generate identities. Lines leave `PlaceOrderGrpcMapper` without IDs; the application service assigns them.
 - **Use `string` for decimals** (money) in proto — avoid `double`/`float` for financial values.
 - **Error mapping**: domain exceptions → gRPC `Status` codes at the adapter, same pattern as REST → HTTP status.
 - **Versioning**: put services in `ecom.order.v1` package. A breaking change means `v2`, not editing `v1`.

@@ -85,8 +85,6 @@ class HexagonalLayersTest {
 
   @Test
   void commands_do_not_live_in_domain() {
-    // Commands represent external intent and live in application/, not domain/.
-    // See hexagonal-ddd-java → "Commands live in application, not domain".
     noClasses()
         .that().resideInAPackage("..domain..")
         .should().haveSimpleNameEndingWith("Command")
@@ -95,9 +93,6 @@ class HexagonalLayersTest {
 
   @Test
   void commands_live_in_application_command_package() {
-    // Positive counterpart to the rule above: a class named *Command must live in
-    // ..application.command.. — not scattered in web, infrastructure, or elsewhere.
-    // Name-based checks like this are cheap and catch drift early.
     classes()
         .that().haveSimpleNameEndingWith("Command")
         .should().resideInAPackage("..application.command..")
@@ -106,10 +101,6 @@ class HexagonalLayersTest {
 
   @Test
   void generated_rest_api_types_are_only_used_by_web_adapter() {
-    // Generated OpenAPI DTOs and interfaces are web-adapter types. They must not leak
-    // into application/ or domain/. The controller implements the generated interface
-    // and the web mappers reference the DTOs — nobody else should.
-    // Counterpart rule for proto classes in grpc-adapter.md would follow the same shape.
     noClasses()
         .that().resideOutsideOfPackage("..infrastructure.web..")
         .should().dependOnClassesThat().resideInAPackage("..infrastructure.web.generated..")
@@ -117,6 +108,12 @@ class HexagonalLayersTest {
   }
 }
 ```
+
+What the last three rules are defending:
+
+- **Commands represent external intent**, so they live in `application/`, never `domain/` — see `hexagonal-ddd-java` → "Commands live in application, not domain".
+- **`commands_live_in_application_command_package` is the positive counterpart**: a `*Command` class must sit in `..application.command..`, not scattered through web or infrastructure. Name-based checks like this are cheap and catch drift early.
+- **Generated OpenAPI DTOs and interfaces are web-adapter types.** The controller implements the generated interface and the web mappers reference the DTOs; nobody else should. A counterpart rule for the proto classes in `grpc-adapter.md` takes the same shape.
 
 ## Multi-BC boundary rules
 

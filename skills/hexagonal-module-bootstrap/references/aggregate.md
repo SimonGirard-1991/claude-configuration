@@ -37,8 +37,10 @@ This `Money` is a **minimal pedagogical example**, not a complete monetary libra
 - No check here on negative amounts — valid for refunds/credits, invalid for prices. Enforce per use case.
 - For anything beyond exploratory code, evaluate a dedicated library (Joda-Money, JavaMoney / JSR 354).
 
+If a shared kernel already defines `Money`, import that one instead of copying this.
+
 ```java
-// order/domain/model/Money.java  (or import from shared kernel if available)
+// order/domain/model/Money.java
 package com.company.ecom.order.domain.model;
 
 import java.math.BigDecimal;
@@ -71,9 +73,6 @@ public record Money(BigDecimal amount, Currency currency) {
     return new Money(amount.multiply(BigDecimal.valueOf(factor)), currency);
   }
 
-  // Explicit rejection of ISO pseudo-currencies (XAU, XXX, …) whose getDefaultFractionDigits()
-  // returns -1. Fails loudly at the boundary instead of leaking a BigDecimal scale of -1 through
-  // the arithmetic. Replace this with a lookup table if your domain genuinely trades gold.
   private static int fractionDigits(Currency currency) {
     int digits = currency.getDefaultFractionDigits();
     if (digits < 0) {
@@ -187,9 +186,9 @@ public record OrderPlaced(
     lines = List.copyOf(lines);
   }
 }
-
-// Similar records for OrderPaid, OrderShipped, OrderCancelled.
 ```
+
+`OrderPaid`, `OrderShipped` and `OrderCancelled` follow the same shape.
 
 ## Aggregate root
 
@@ -208,7 +207,7 @@ public final class Order {
   private final UUID customerId;
   private final List<OrderLine> lines;
   private OrderStatus status;
-  private long version;   // optimistic locking version, incremented by the repository on each update
+  private long version;
 
   private Order(OrderId id, UUID customerId, List<OrderLine> lines, OrderStatus status, long version) {
     this.id = id;
@@ -218,7 +217,6 @@ public final class Order {
     this.version = version;
   }
 
-  // Rule (hexagonal-ddd-java): factory enforces creation invariants.
   public static Result place(UUID customerId, List<OrderLine> lines, Clock clock) {
     if (lines == null || lines.isEmpty()) throw new EmptyOrderException();
     var order = new Order(OrderId.newId(), customerId, lines, OrderStatus.PLACED, 0L);
@@ -226,14 +224,10 @@ public final class Order {
     return new Result(order, event);
   }
 
-  // Rehydration from persistence — infra calls this.
   public static Order rehydrate(OrderId id, UUID customerId, List<OrderLine> lines, OrderStatus status, long version) {
     return new Order(id, customerId, lines, status, version);
   }
 
-  // Called by the repository after a successful optimistic update.
-  // Named to make the persistence seam explicit — this is NOT a business operation.
-  // The guard rejects going backwards, catching the "saved twice with stale state" class of bug.
   public void markPersistedAtVersion(long newVersion) {
     if (newVersion < version) {
       throw new IllegalArgumentException(
@@ -242,7 +236,6 @@ public final class Order {
     this.version = newVersion;
   }
 
-  // Rule: aggregate-local invariants enforced by aggregate methods, not the service.
   public OrderPaid markPaid(Clock clock) {
     if (status != OrderStatus.PLACED) {
       throw new InvalidOrderStateException("must be PLACED to pay, was " + status);
@@ -285,12 +278,14 @@ public final class Order {
 
 ## Notes
 
-- **Factory returns `(Order, Event)`** so the application service can persist and publish without re-reading the aggregate.
+- **The factory enforces the creation invariants** and returns `(Order, Event)`, so the application service can persist and publish without re-reading the aggregate.
+- **Aggregate-local invariants belong to aggregate methods, not the service.** `markPaid`, `ship` and `cancel` each guard their own state transition; a service that checks `status` before calling them has taken the domain's job.
 - **Behavior methods return a single event** representing the state change. Multiple events per call are fine when a real business operation produces several facts.
 - **`rehydrate` is the only public constructor path** used by the repository — keep it there to avoid anemic construction from the outside.
 - **`Clock` is injected**, never `Instant.now()`. See `hexagonal-ddd-java` for why.
 - **`version` is a persistence concurrency token, not a business invariant**. It rides on the aggregate because rehydrated state needs to carry it, and because that is the pragmatic option for a Spring/jOOQ template. For a stricter domain, keep the token out of the aggregate and snapshot it inside the repository — heavier, but the domain stops knowing that storage has versions.
 - **Save path**: `place()` creates the aggregate at version 0. The *first* save INSERTs at version 0 (no bump — there's nothing to conflict with yet). *Subsequent* saves UPDATE with `WHERE version = ?`, bump the DB column to `version + 1`, and call `markPersistedAtVersion(newVersion)` on the in-memory aggregate. See `db-adapter-jooq.md` for the SQL and `ConcurrentAggregateModificationException` (in `application/exception/`) for the failure mode.
+- **`markPersistedAtVersion` is a persistence seam, not a business operation** — the repository calls it after a successful optimistic update, and the name says so deliberately. Its guard against a version going backwards catches the "saved twice with stale state" class of bug.
 
 ## Variants
 

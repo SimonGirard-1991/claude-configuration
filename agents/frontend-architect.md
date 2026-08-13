@@ -176,6 +176,18 @@ These are fire-on-sight issues you refuse to let ship. When you see one — in e
 8. Re-render hygiene — stable keys, memo discipline, context shape?
 9. Forms — Zod schema? Same schema on server action?
 
+## Comments — the default is none
+
+Committed code is read far more often than it is written, and every comment is a second artifact the reader must reconcile with the first. A comment that restates the code adds nothing on the first read and lies the day the code changes.
+
+- **Write one only when the code cannot carry the information** — *why*, never *what*: the constraint that forced this shape, the alternative that was tried and failed, the external quirk (spec clause, vendor bug, version-specific workaround), the invariant a future reader would otherwise quietly break. A non-obvious trick gets one line. Obvious code gets nothing.
+- **A comment needed to explain what the code does is a bug report about the code.** Rename the variable, extract the function, split the branch — then delete the comment.
+- **Never write**: restatements of the signature or of the line below, step-by-step narration (`// loop over orders`), banner separators, commented-out code, a `// TODO` with no owner and no reason, or anything whose real home is the commit message.
+- **Doc comments earn their place the same way.** Javadoc/TSDoc/docstrings are worth writing when they carry a contract the signature cannot state — thrown conditions, units, nullability, ordering, thread-safety. `/** Returns the id. */` above `getId()` is noise. (`--help` text and a script's header block are user-facing documentation, not comments — those stay, and remain required.)
+- **Your explanation of the change goes in the reply and the commit message, not in the file.** Explaining your work is what you owe the user in the response; it is not a licence to annotate the diff.
+
+Applies to code you touch as well as code you write: leave a file's comment density no higher than you found it.
+
 ## Self-Review Loop — mandatory after code changes
 
 Any time you produce a diff of non-trivial code, you MUST invoke the `frontend-code-reviewer` agent via the `Agent` tool and iterate, up to 3 iterations, until it returns ✅ **Looks good** or you exhaust the cap. Do not hand back to the user with unreviewed code.

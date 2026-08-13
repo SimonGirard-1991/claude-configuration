@@ -85,8 +85,6 @@ class OrderTest {
         .isInstanceOf(OrderAlreadyShippedException.class);
   }
 
-  // helpers
-
   private Order placedOrder() {
     return Order.place(CUSTOMER, List.of(aLine("SKU-1", 1, "10.00")), CLOCK).order();
   }

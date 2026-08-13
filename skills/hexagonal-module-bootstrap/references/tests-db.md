@@ -29,8 +29,6 @@ public abstract class AbstractContainerTest {
           .withDatabaseName("test")
           .withUsername("test")
           .withPassword("test")
-          // Rule: reuse is a LOCAL development optimization only.
-          // Enable via system property; default off so CI and new devs get a clean run.
           .withReuse(Boolean.getBoolean("testcontainers.reuse"));
 
   @DynamicPropertySource
@@ -42,7 +40,7 @@ public abstract class AbstractContainerTest {
 }
 ```
 
-Container reuse is **opt-in**, not default. Locally, enable it by:
+Container reuse is a **local development optimization only**, gated behind a system property so CI and new developers get a clean run by default. Locally, enable it by:
 1. Running tests with `-Dtestcontainers.reuse=true` (or add it to your IDE run config).
 2. Setting `testcontainers.reuse.enable=true` in `~/.testcontainers.properties`.
 
@@ -81,10 +79,6 @@ class OrderRepositoryJooqTest extends AbstractContainerTest {
 
   @Test
   void second_save_updates_existing_row_and_bumps_version() {
-    // First save: INSERT at version 0.
-    // Second save: UPDATE via optimistic-lock path, version bumps to 1.
-    // Exactly one row remains either way — the test name intentionally avoids
-    // calling this "idempotent" because the aggregate's version changes.
     var order = placedOrder();
     repo.save(order);
     repo.save(order);
@@ -101,6 +95,8 @@ class OrderRepositoryJooqTest extends AbstractContainerTest {
 }
 ```
 
+`second_save_updates_existing_row_and_bumps_version` exercises both write paths: the first save INSERTs at version 0, the second UPDATEs through the optimistic-lock path and bumps the version to 1. Exactly one row remains either way. The test name deliberately avoids the word "idempotent" — the row count is stable, but the aggregate's version is not.
+
 ## Optimistic-lock test
 
 ```java
@@ -115,13 +111,15 @@ void save_with_stale_version_throws_ConcurrentAggregateModificationException() {
   var loadedB = repo.findById(initial.id()).orElseThrow();
 
   loadedA.markPaid(Clock.systemUTC());
-  repo.save(loadedA);      // succeeds, DB version -> 1, loadedA.version() -> 1
+  repo.save(loadedA);
 
   loadedB.cancel(Clock.systemUTC());
-  assertThatThrownBy(() -> repo.save(loadedB))  // still holds version 0
+  assertThatThrownBy(() -> repo.save(loadedB))
       .isInstanceOf(ConcurrentAggregateModificationException.class);
 }
 ```
+
+Both handles are loaded at version 0. Saving `loadedA` succeeds and takes the DB row — and `loadedA` itself — to version 1. `loadedB` still holds version 0, so its `WHERE version = 0` matches nothing and the repository raises the conflict.
 
 ## What to test here
 

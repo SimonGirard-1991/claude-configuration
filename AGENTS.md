@@ -90,6 +90,15 @@ for all pairs unless noted; "the architect" / "the reviewer" mean whichever pair
    The java and frontend pairs pass a plain criticality calibration; no lens
    coupling exists there.
 
+8. **Comment doctrine**: each of the three code-writing agents carries the section
+   `## Comments — the default is none`, identical wording in all three — it is one
+   rule stated three times, not three rules. Both reviewers carry the matching
+   **Comment noise** bullet in their code-level layer, which is what makes the
+   self-review loop enforce it rather than merely assert it. Keep the two halves
+   together: with the doctrine alone, breaches ship unopposed; with the reviewer
+   bullet alone, the architects were never told the rule they're being judged on.
+   The validator greps the heading and the bullet, so reword either and it fires.
+
 ### Shared vocabulary (soft coupling, not hook-enforced)
 
 The calibration tier taxonomy — *throwaway / internal tool / production service /
@@ -126,7 +135,7 @@ against.
 Since 2026-07-08 the mechanical parts of this checklist are enforced by
 `~/.claude/hooks/validate-agent-contracts.sh`, a PostToolUse hook that runs on
 every edit under `agents/` or to this file and feeds drift back to the editing
-session (exit 2). It checks surfaces 1–3, 6, and 7 plus frontmatter sanity; the
+session (exit 2). It checks surfaces 1–3 and 6–8 plus frontmatter sanity; the
 judgment items below still need a human. If a contract surface legitimately
 changes, update AGENTS.md **and** the validator in the same commit.
 
@@ -135,6 +144,8 @@ and `script-engineer.md`):
 - [ ] If you change how it invokes `code-reviewer`, update the Contract section above.
 - [ ] If you change the severity or verdict it consumes, update `code-reviewer.md` to match.
 - [ ] If you add a new sub-agent invocation, add the contract here.
+- [ ] If you reword the comment doctrine, reword it in all three agents and re-check the
+      reviewers' **Comment noise** bullet still matches (surface 8).
 
 When editing `code-reviewer.md` (same checklist for `frontend-code-reviewer.md`):
 - [ ] If you change the output format (severity emojis, verdict labels, section headings
@@ -158,6 +169,20 @@ When editing `AGENTS.md` itself:
 
 ## Decisions
 
+- **Comments default to none in generated code** (decided 2026-08-11; surface 8).
+  The agents were over-commenting badly — narration on obvious code, rationale
+  paragraphs above ordinary classes. Three causes, fixed together because any one
+  of them alone would have re-established the behaviour: (a) no agent had a comment
+  rule at all, so the default was the chat-reply instinct to explain generously;
+  (b) `skills/hexagonal-module-bootstrap` — the skill whose whole purpose is
+  code-ready templates — carried 119 explanatory comment lines plus 13 `// Rule:`
+  lines *inside* its Java fences, against ≤ 1 for every other skill in the tree, so
+  copying a template meant copying its comment density; (c) both reviewers were
+  silent on comments, so the self-review loop never pushed back. The templates now
+  keep rationale in the prose around each block rather than inside it, which is
+  what makes the fix structural: what you copy is what ships. Related: the
+  `// Rule:` convention and its two "strip these before committing" instructions
+  in that skill are retired — they only ever covered the marked minority.
 - **Reviewers hold conditional memory-write access** (decided 2026-07-08;
   supersedes the memory-file part of the 2026-04-23 decision below). `Write`/`Edit`
   are back in both reviewers' tools, prompt-scoped to their own memory directory

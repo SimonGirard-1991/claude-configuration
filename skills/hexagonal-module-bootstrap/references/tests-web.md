@@ -97,8 +97,6 @@ class OrderControllerTest {
 
   @Test
   void POST_v1_orders_rejects_non_positive_quantity_with_400() throws Exception {
-    // The spec declares `minimum: 1` on quantity, so 0 and -1 both fail at the generated
-    // @Min validation before the controller method is entered.
     mvc.perform(post("/v1/orders")
             .contentType(MediaType.APPLICATION_JSON)
             .content("""
@@ -114,8 +112,6 @@ class OrderControllerTest {
 
   @Test
   void POST_v1_orders_rejects_unitPrice_as_number_with_400() throws Exception {
-    // The spec types unitPrice as string with pattern '^\\d+(\\.\\d+)?$'.
-    // A JSON number fails Jackson deserialization against a String field.
     mvc.perform(post("/v1/orders")
             .contentType(MediaType.APPLICATION_JSON)
             .content("""
@@ -130,6 +126,11 @@ class OrderControllerTest {
   }
 }
 ```
+
+Both rejection tests exercise validation that happens *before* the controller method is entered, which is the point of running them at the slice level:
+
+- **Non-positive quantity** — the spec declares `minimum: 1`, so the generated `@Min` rejects `0` and `-1`.
+- **`unitPrice` as a JSON number** — the spec types it as a string with pattern `^\d+(\.\d+)?$`, so a number fails Jackson deserialization against a `String` field.
 
 ## Mapper tests
 
@@ -160,9 +161,6 @@ class PlaceOrderRequestMapperTest {
     assertThat(cmd.customerId()).isEqualTo(customerId);
     assertThat(cmd.lines()).hasSize(1);
     var line = cmd.lines().get(0);
-    // cmd.lines() are PlaceOrder.Line (application command DTOs), not domain OrderLine/Money.
-    // The mapper parses unitPrice from string to BigDecimal here; domain Money construction
-    // happens later, inside the use case.
     assertThat(line.sku()).isEqualTo("SKU-1");
     assertThat(line.quantity()).isEqualTo(2);
     assertThat(line.unitPrice()).isEqualByComparingTo("10.00");
@@ -171,10 +169,14 @@ class PlaceOrderRequestMapperTest {
 }
 ```
 
+The assertions above deal in `PlaceOrder.Line` — application command DTOs, not domain `OrderLine`/`Money`. The mapper parses `unitPrice` from string to `BigDecimal` and stops there; `Money` is constructed later, inside the use case.
+
 ## Exception-handler test
 
+`OrderExceptionHandlerTest` belongs to the same `@WebMvcTest` slice.
+
 ```java
-// OrderExceptionHandlerTest.java — part of the same @WebMvcTest slice
+// OrderExceptionHandlerTest.java
 @Test
 void OrderAlreadyShipped_maps_to_409() throws Exception {
   when(placeOrderService.handle(any())).thenThrow(new OrderAlreadyShippedException());

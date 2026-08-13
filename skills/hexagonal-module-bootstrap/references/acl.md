@@ -63,7 +63,6 @@ public class PaymentGatewayAcl implements PaymentGateway {
 
   @Override
   public PaymentResult authorize(OrderId orderId, Money amount) {
-    // Rule (hexagonal-ddd-java): foreign types stop here. Domain never sees StripeChargeResponse.
     var foreign = client.charge(translator.toStripeCharge(orderId, amount));
     return translator.toDomainResult(foreign);
   }
@@ -99,7 +98,6 @@ public class StripeClient {
         .body(StripeChargeResponse.class);
   }
 
-  // Foreign wire types live here — never imported from domain/application.
   public record StripeChargeRequest(long amountCents, String currency, String idempotencyKey, String description) {}
   public record StripeChargeResponse(String id, String status, String failureCode) {}
 }
@@ -128,7 +126,7 @@ public class PaymentTranslator {
     return new StripeChargeRequest(
         cents,
         amount.currency().getCurrencyCode().toLowerCase(),
-        orderId.value().toString(),       // use orderId as idempotency key
+        orderId.value().toString(),
         "Order " + orderId.value());
   }
 
@@ -142,7 +140,8 @@ public class PaymentTranslator {
 ## Notes
 
 - **The ACL is a bidirectional seam**: translator has two methods, one per direction. No domain type appears in foreign shapes; no foreign type appears in domain shapes.
-- **Idempotency**: pass a stable key (aggregate id) to the external system whenever possible. Retries are real.
+- **Foreign types stop at `authorize`** (`hexagonal-ddd-java`). `StripeChargeRequest` and `StripeChargeResponse` are declared inside `StripeClient` and never imported from `domain/` or `application/` — the domain has no idea Stripe exists.
+- **Idempotency**: pass a stable key (aggregate id) to the external system whenever possible — that is what `orderId` is doing in the `StripeChargeRequest` above. Retries are real.
 - **Error handling**: foreign exceptions (`RestClientException`, timeouts) are caught here and either mapped to a domain-meaningful result (`PaymentResult` with `authorized=false`) or wrapped in a specific application exception. Never let `org.springframework.web.client.*` leak out.
 - **Observability**: put tracing/logging here; adapters are the right place.
 

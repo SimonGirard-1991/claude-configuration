@@ -28,12 +28,10 @@ order/
 
 ## OpenAPI contract
 
+**3.0.3 is the safe default**: the Java/Spring generators have years of mileage against it. 3.1.0 has cleaner JSON Schema semantics (true draft-2020-12 alignment, no more `nullable`), but generator support is still uneven across versions. Bump it only if your team has explicitly validated 3.1.0 against the generator version pinned below.
+
 ```yaml
 # src/main/resources/openapi/order-v1.yaml
-# OpenAPI 3.0.3 is the safe default: the Java/Spring generators have years of mileage
-# against it. 3.1.0 has cleaner JSON Schema semantics (true draft-2020-12 alignment,
-# no more `nullable`), but generator support is still uneven across versions. If your
-# team has explicitly validated 3.1.0 against the generator version pinned below, bump it.
 openapi: 3.0.3
 info:
   title: Order API
@@ -132,8 +130,6 @@ components:
         currency:  { type: string }
 
     Problem:
-      # RFC 7807 — let your generator map this to Spring's ProblemDetail if supported,
-      # otherwise a plain POJO is fine. ProblemDetail mapping is orthogonal to contract-first.
       type: object
       properties:
         type:   { type: string, format: uri }
@@ -155,6 +151,7 @@ Notes on the contract:
 - **Status enum is explicit** in the spec. Consumers generate their own enum from it. Never return free-form strings from domain enums without guaranteeing the mapping is stable.
 - **Versioning is in the URL** (`/v1/orders`) AND in schema names (`PlaceOrderV1Request`). Both matter: URL for runtime routing, names for coexistence when you introduce `V2` schemas in the same spec before retiring `V1`.
 - **A breaking change means a new operation and new schemas, not edits in place.** The generator and consumers both rely on stable schema names.
+- **The `Problem` schema is RFC 7807.** Let your generator map it to Spring's `ProblemDetail` if it supports that; otherwise a plain POJO is fine. `ProblemDetail` mapping is orthogonal to contract-first.
 
 ## Build plugin
 
@@ -279,8 +276,6 @@ import java.math.BigDecimal;
 @Component
 public class PlaceOrderRequestMapper {
 
-  // Rule: generated DTO stops here. No domain types in, application command out.
-  // ID generation is the service's job; lines arrive without IDs.
   public PlaceOrder toCommand(PlaceOrderV1Request req) {
     var lines = req.getLines().stream()
         .map(l -> new PlaceOrder.Line(
@@ -293,6 +288,8 @@ public class PlaceOrderRequestMapper {
   }
 }
 ```
+
+The generated DTO stops at this mapper: no domain types go in, an application command comes out. Lines arrive without IDs — generating them is the service's job, not the adapter's.
 
 ```java
 // order/infrastructure/web/mapper/OrderResponseMapper.java
@@ -360,15 +357,11 @@ public class OrderExceptionHandler {
     return problem(HttpStatus.PAYMENT_REQUIRED, "Payment declined", e.getMessage());
   }
 
-  // Optimistic-lock: 409 CONFLICT — state changed under the caller, not malformed.
   @ExceptionHandler(ConcurrentAggregateModificationException.class)
   public ProblemDetail onConcurrentModification(ConcurrentAggregateModificationException e) {
     return problem(HttpStatus.CONFLICT, "Concurrent modification", e.getMessage());
   }
 
-  // Catches invariants surfaced at VO construction (Currency.getInstance, Money scale check,
-  // BigDecimal parsing). The spec's Pattern validation catches most of these at the boundary,
-  // but not all — e.g. "ZZZ" passes a 3-letter pattern but fails Currency.getInstance.
   @ExceptionHandler(IllegalArgumentException.class)
   public ProblemDetail onIllegalArgument(IllegalArgumentException e) {
     return problem(HttpStatus.BAD_REQUEST, "Invalid request", e.getMessage());
@@ -383,6 +376,11 @@ public class OrderExceptionHandler {
 }
 ```
 
+Two of those handlers are less obvious than they look:
+
+- **`ConcurrentAggregateModificationException` → 409, not 400.** State changed under the caller; the request itself was never malformed.
+- **`IllegalArgumentException` → 400 catches the invariants that surface at value-object construction** — `Currency.getInstance`, the `Money` scale check, `BigDecimal` parsing. The spec's `pattern` validation catches most of these at the boundary but not all: `"ZZZ"` passes a three-letter pattern and still fails `Currency.getInstance`.
+
 **Every status code the handler produces must be declared in the YAML** for its operation. A `402 PAYMENT_REQUIRED` that isn't in the spec is a bug: clients can't anticipate it, contract tests don't exercise it, and tooling that generates clients from the spec won't model it. If you add a handler, add the response to the YAML in the same commit.
 
 ## Contract conformance testing
@@ -396,17 +394,15 @@ Three layers, each catches different things:
 Example of layer 2:
 
 ```java
-// OrderApiContractTest.java — part of the web slice
+// OrderApiContractTest.java
 @Test
 void real_responses_conform_to_the_spec() {
   var validator = OpenApiInteractionValidator.createForSpecificationUrl(
       "classpath:openapi/order-v1.yaml").build();
-
-  // Hit every operation with a minimal valid body via MockMvc, capture the response,
-  // and feed both request and response to the validator. Fails on any schema mismatch.
-  // Generator-agnostic — the YAML is the oracle, the handler is the subject.
 }
 ```
+
+`OrderApiContractTest` belongs to the web slice. Fill the body by hitting every operation with a minimal valid body via MockMvc, capturing the response, and feeding both request and response to the validator — it fails on any schema mismatch. The approach is generator-agnostic: the YAML is the oracle, the handler is the subject.
 
 Don't skip layer 3 because layer 2 passes. Layer 2 exercises the happy path (and whatever inputs you write); fuzzing explores the input space and surfaces drift you wouldn't have thought to test.
 

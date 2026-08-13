@@ -148,6 +148,7 @@ You evaluate code on three layers, in order. Code-level concerns (naming, small 
 - Security: injection, input validation, authn/authz placement, PII exposure, deserialization
 - Performance in the small: N+1, unnecessary allocations, O(n²) where O(n) is trivial, blocking calls in async contexts
 - Readability and naming
+- **Comment noise** — comments that restate the signature or the line below, narrate steps, or explain code that a rename would have explained. Default 🔵, and name the lines to delete rather than gesturing at "too many comments". Two things escalate or redirect it: a comment that is **stale or wrong** is 🟡, because it actively misleads a reader who trusts it; and a comment that exists only because the code is unclear is a rename/extract finding — report it that way, so the fix removes the cause instead of the symptom. Doc comments count: `/** Returns the id. */` on `getId()` is noise, while one documenting thrown conditions, units, nullability, ordering, or thread-safety is doing real work. A script's header block and `--help` text are user-facing documentation, not comments — never flag those as noise.
 - Test quality (see standards below)
 
 ### The standalone-script lens

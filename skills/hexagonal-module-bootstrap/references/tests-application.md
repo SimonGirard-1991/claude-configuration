@@ -70,13 +70,6 @@ class PlaceOrderServiceTest {
     repo = new FakeOrderRepository();
     gateway = new FakePaymentGateway();
     outbox = new FakeOrderEventOutbox();
-    // Two-bean split (see use-case.md). In unit tests we instantiate the real committer
-    // directly — no Spring proxy is involved, so @Transactional is a no-op here.
-    // That is intentional: unit tests cover orchestration & invariants. Transactional
-    // rollback semantics (especially save + outbox atomicity) require a committer
-    // integration test with the real repository and real outbox store against
-    // Testcontainers — see the "save + outbox atomicity" section in tests-db.md.
-    // Neither fakes here nor repository-only tests there cover the join.
     var committer = new PlaceOrderCommitter(repo, outbox);
     service = new PlaceOrderService(gateway, committer, CLOCK);
   }
@@ -118,7 +111,9 @@ For repositories and event publishers, a fake is almost always the better choice
 
 ## Transactional behavior
 
-Transactions cross the application/adapter boundary. In unit tests, that boundary doesn't exist. To verify transactional rollback behavior (e.g., event publication only happens *after* a successful commit), write an integration test — see `tests-db.md`.
+Transactions cross the application/adapter boundary. In unit tests, that boundary doesn't exist.
+
+`setUp` instantiates the real `PlaceOrderCommitter` directly (the two-bean split from `use-case.md`). No Spring proxy is involved, so `@Transactional` is a no-op here — and that is intentional: these tests cover orchestration and invariants, nothing more. Rollback semantics, and `save` + outbox atomicity in particular, need a committer integration test with the real repository and real outbox store against Testcontainers — see the "save + outbox atomicity" section in `tests-db.md`. Neither the fakes here nor repository-only tests there cover the join between the two.
 
 ## Conventions
 

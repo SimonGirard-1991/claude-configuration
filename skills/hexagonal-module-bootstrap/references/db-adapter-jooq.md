@@ -80,17 +80,10 @@ public class OrderRepositoryJooq implements OrderRepository {
 
   @Override
   public void save(Order order) {
-    // Separate INSERT vs UPDATE so optimistic locking is unambiguous.
-    // An upsert would silently clobber concurrent updates.
     boolean exists = dsl.fetchExists(
         dsl.selectOne().from(ORDERS).where(ORDERS.ID.eq(order.id().value())));
 
     if (!exists) {
-      // Template assumption: IDs are server-generated via UUID.randomUUID() in the application
-      // service, so PK collisions are astronomically unlikely. If IDs become client-provided
-      // (e.g., derived from an idempotency key), two parallel inserts can race — catch the
-      // resulting DataIntegrityViolationException here and map it to the application-level
-      // conflict your API expects (409 / ABORTED), not a raw 500.
       dsl.insertInto(ORDERS)
           .set(ORDERS.ID, order.id().value())
           .set(ORDERS.CUSTOMER_ID, order.customerId())
@@ -98,7 +91,6 @@ public class OrderRepositoryJooq implements OrderRepository {
           .set(ORDERS.VERSION, order.version())
           .execute();
     } else {
-      // Optimistic lock: WHERE version = expected. If 0 rows match, someone else wrote first.
       long newVersion = order.version() + 1;
       int updated = dsl.update(ORDERS)
           .set(ORDERS.STATUS, order.status().name())
@@ -113,14 +105,6 @@ public class OrderRepositoryJooq implements OrderRepository {
       order.markPersistedAtVersion(newVersion);
     }
 
-    // Rule: delete-all + reinsert of lines is the simplest correct strategy for small aggregates.
-    // Trade-offs to consider before keeping this in production:
-    //   - Loses per-line audit metadata (created_at, updated_at, soft-delete flags).
-    //   - Triggers fire on every line on every save — can be noisy for audit tables.
-    //   - Ratio of write volume to actual change is poor for large aggregates.
-    //   - Concurrency: the optimistic-lock check above guards against concurrent writers;
-    //     lines are safe to replace within the same transaction.
-    // For large aggregates or high write volume, compute a diff (inserts/updates/deletes by primary key).
     dsl.deleteFrom(ORDER_LINES).where(ORDER_LINES.ORDER_ID.eq(order.id().value())).execute();
 
     var batch = dsl.batch(
@@ -185,7 +169,9 @@ public class OrderRecordMapper {
 
 - **Commit generated jOOQ classes** to git if you use OSS jOOQ (requires a live DB for codegen). Alternative: run codegen in CI and cache.
 - **Never leak jOOQ `Record` types past the repository**. Map at the boundary.
-- **For aggregate updates with concurrency semantics, prefer optimistic locking** (`WHERE version = ?`) as shown in the `save` implementation above — consistent with the in-body comment that "an upsert would silently clobber concurrent updates". Use `onConflict...doUpdate` (Postgres upsert) only for simple idempotent inserts or projections where clobbering is acceptable (e.g., a read-model table keyed on a natural identifier, or an idempotent outbox dispatch record).
+- **For aggregate updates with concurrency semantics, prefer optimistic locking** (`WHERE version = ?`) as shown in the `save` implementation above. That is why `save` branches on `fetchExists` instead of issuing an upsert: the INSERT/UPDATE split keeps the locking unambiguous, where an upsert would silently clobber a concurrent update. Use `onConflict...doUpdate` (Postgres upsert) only for simple idempotent inserts or projections where clobbering is acceptable (e.g., a read-model table keyed on a natural identifier, or an idempotent outbox dispatch record).
+- **The insert branch assumes server-generated IDs.** `UUID.randomUUID()` in the application service makes a PK collision astronomically unlikely, so the template does not guard it. If IDs become client-provided — derived from an idempotency key, say — two parallel inserts can race: catch the resulting `DataIntegrityViolationException` there and map it to the application-level conflict your API already expects (409 / `ABORTED`), not a raw 500.
+- **Lines are deleted and reinserted on every save**, the simplest correct strategy for a small aggregate. The optimistic-lock check above guards against concurrent writers, so replacing lines within the same transaction is safe. What it costs: per-line audit metadata (`created_at`, `updated_at`, soft-delete flags) is lost, triggers fire on every line on every save — noisy for audit tables — and the ratio of write volume to actual change is poor once aggregates grow. For large aggregates or high write volume, compute a diff instead (inserts/updates/deletes by primary key).
 - **Prefer explicit columns** over `select *` in jOOQ DSL — refactoring safety.
 
 ## Variants — non-jOOQ

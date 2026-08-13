@@ -26,7 +26,7 @@ Two pieces live here:
 1. `JdbcOrderEventOutbox` — implements `OrderEventOutbox`, writes to an `order_event_outbox` table.
 2. `OutboxKafkaRelay` — scheduled process (or CDC consumer via Debezium) that drains the outbox to Kafka and marks rows as published.
 
-Full outbox implementation is out of scope for this skill — it's a discrete architectural concern. The template below shows the **shape** of the outbox-writing side; the relay is a one-line placeholder.
+Full outbox implementation is out of scope for this skill — it's a discrete architectural concern. The template below shows the **shape** of the outbox-writing side; the relay is described but not scaffolded.
 
 ### Outbox writer
 
@@ -38,37 +38,54 @@ import com.company.ecom.order.application.port.OrderEventOutbox;
 import com.company.ecom.order.domain.event.OrderEvent;
 import com.company.ecom.order.infrastructure.messaging.producer.mapper.OrderIntegrationEventMapper;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jooq.DSLContext;
+import org.jooq.JSONB;
 import org.springframework.stereotype.Component;
+
+import java.util.UUID;
+
+import static com.company.ecom.generated.jooq.Tables.ORDER_EVENT_OUTBOX;
 
 @Component
 public class JdbcOrderEventOutbox implements OrderEventOutbox {
 
   private final DSLContext dsl;
   private final OrderIntegrationEventMapper mapper;
+  private final ObjectMapper objectMapper;
 
-  public JdbcOrderEventOutbox(DSLContext dsl, OrderIntegrationEventMapper mapper) {
+  public JdbcOrderEventOutbox(DSLContext dsl, OrderIntegrationEventMapper mapper, ObjectMapper objectMapper) {
     this.dsl = dsl;
     this.mapper = mapper;
+    this.objectMapper = objectMapper;
   }
 
   @Override
   public void record(OrderEvent event) {
-    // Rule: called INSIDE the application-service transaction. Atomic with aggregate save.
-    var integration = mapper.toIntegration(event);
-    // dsl.insertInto(ORDER_EVENT_OUTBOX)... (implementation: serialize `integration` as JSONB + metadata)
+    dsl.insertInto(ORDER_EVENT_OUTBOX)
+        .set(ORDER_EVENT_OUTBOX.ID, UUID.randomUUID())
+        .set(ORDER_EVENT_OUTBOX.AGGREGATE_ID, event.orderId().value())
+        .set(ORDER_EVENT_OUTBOX.PAYLOAD, JSONB.valueOf(toJson(mapper.toIntegration(event))))
+        .set(ORDER_EVENT_OUTBOX.OCCURRED_AT, event.occurredAt())
+        .execute();
+  }
+
+  private String toJson(Object payload) {
+    try {
+      return objectMapper.writeValueAsString(payload);
+    } catch (JsonProcessingException e) {
+      throw new IllegalStateException("cannot serialize integration event: " + payload.getClass(), e);
+    }
   }
 }
-
 ```
+
+`record` is called *inside* the application-service transaction, which is the whole point: the outbox row commits atomically with the aggregate save.
 
 ### Kafka relay
 
-```java
-// order/infrastructure/messaging/outbox/OutboxKafkaRelay.java
-// Reads unpublished outbox rows AFTER commit and publishes to Kafka. Marks rows published on success.
-// Can be a @Scheduled Spring task, a dedicated worker, or replaced by Debezium CDC on the outbox table.
-```
+`OutboxKafkaRelay` (in `order/infrastructure/messaging/outbox/`) reads unpublished outbox rows **after** commit, publishes them to Kafka, and marks the rows published on success. It can be a `@Scheduled` Spring task, a dedicated worker, or replaced entirely by Debezium CDC on the outbox table.
 
 ### Integration event mapper
 
@@ -88,7 +105,6 @@ public class OrderIntegrationEventMapper {
     };
   }
 
-  // Integration events live here — they are the *published language*.
   public record OrderPlacedV1(UUID orderId, UUID customerId, BigDecimal total, String currency, Instant occurredAt) {}
   public record OrderPaidV1(UUID orderId, Instant occurredAt) {}
   public record OrderShippedV1(UUID orderId, Instant occurredAt) {}
@@ -97,6 +113,7 @@ public class OrderIntegrationEventMapper {
 ```
 
 Notes:
+- **The `V1` records nested in the mapper are the published language** — the vocabulary other bounded contexts consume. Keeping them here, beside the translation that produces them, is deliberate.
 - **Integration events are versioned** (`V1`). Evolve additively; never break old consumers.
 - **Partition key** is the aggregate id — preserves per-aggregate ordering.
 - **The relay** uses the same mapper and publishes `integration` payloads to `ecom.order.events.v1`. It never reads domain events directly from the aggregate table.
@@ -124,8 +141,6 @@ public class PaymentEventsConsumer {
     this.translator = translator;
   }
 
-  // Rule (hexagonal-ddd-java): we consume Billing's *integration* events, never its domain events.
-  // Rule: ack after successful handling. Duplicate delivery is the norm — handler must be idempotent.
   @KafkaListener(topics = "ecom.billing.events.v1", groupId = "ecom.order.payments-consumer")
   public void onPaymentEvent(PaymentEventTranslator.IncomingPaymentEvent event) {
     translator.translate(event).ifPresent(service::handle);
@@ -133,12 +148,16 @@ public class PaymentEventsConsumer {
 }
 ```
 
+Two constraints govern this consumer, and neither is visible in the code:
+
+- **It subscribes to Billing's *integration* events, never its domain events** (`hexagonal-ddd-java`). Domain events are Billing's internal language and are not a contract.
+- **Ack after successful handling, and make the handler idempotent.** Duplicate delivery is the norm, not the exception.
+
 ```java
 // order/infrastructure/messaging/consumer/mapper/PaymentEventTranslator.java
 @Component
 public class PaymentEventTranslator {
 
-  // Foreign wire type — lives at the adapter boundary, never in domain.
   public record IncomingPaymentEvent(String type, UUID orderId, String status, Instant ts) {}
 
   public Optional<MarkOrderPaid> translate(IncomingPaymentEvent event) {
@@ -148,6 +167,8 @@ public class PaymentEventTranslator {
   }
 }
 ```
+
+`IncomingPaymentEvent` is a foreign wire type: it belongs to Billing's schema, lives at the adapter boundary, and never travels into `domain/`. Translating it into a `MarkOrderPaid` command here is what stops Billing's model leaking inward.
 
 ## Idempotency
 

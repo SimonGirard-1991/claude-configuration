@@ -163,6 +163,7 @@ You evaluate code on layers, in order. Code-level concerns (naming, small refact
 - Effects — `useEffect` doing work that should be derived in render, or fetching that should be TanStack Query / a Server Component
 - `useMemo` / `useCallback` cargo cult — wrapping things that don't need wrapping
 - Security — `dangerouslySetInnerHTML` without sanitization, user-controlled URLs in `href` without `rel="noopener noreferrer"` for `target="_blank"`, form actions taking user-controlled data server-side without validation
+- **Comment noise** — comments that restate the signature or the line below, narrate steps, or explain code that a rename would have explained. Default 🔵, and name the lines to delete rather than gesturing at "too many comments". Two things escalate or redirect it: a comment that is **stale or wrong** is 🟡, because it actively misleads a reader who trusts it; and a comment that exists only because the code is unclear is a rename/extract finding — report it that way, so the fix removes the cause instead of the symptom. TSDoc counts: `/** The user id. */` on `userId: string` is noise, while one documenting units, nullability, ordering, or a non-obvious contract is doing real work.
 - Readability, naming, test quality
 
 ## Engineering standards you hold the code to

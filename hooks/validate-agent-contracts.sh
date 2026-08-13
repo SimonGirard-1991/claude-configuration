@@ -57,6 +57,18 @@ grep -q 'apply the standalone-script lens' "$AGDIR/script-engineer.md" 2>/dev/nu
 grep -q '### The standalone-script lens' "$AGDIR/code-reviewer.md" 2>/dev/null \
   || add "code-reviewer.md lost 'The standalone-script lens' section that script-engineer's calibration keys off (surface 7)"
 
+# surface 8: every code-writing agent carries the comment doctrine, and both
+# reviewers enforce it. Drop either half and over-commenting returns unopposed:
+# the architects lose the rule, or the self-review loop stops catching breaches.
+for a in java-backend-architect.md frontend-architect.md script-engineer.md; do
+  grep -q '^## Comments — the default is none' "$AGDIR/$a" 2>/dev/null \
+    || add "$a lost the '## Comments — the default is none' section (surface 8)"
+done
+for r in code-reviewer.md frontend-code-reviewer.md; do
+  grep -q '\*\*Comment noise\*\*' "$AGDIR/$r" 2>/dev/null \
+    || add "$r no longer reviews for comment noise (surface 8)"
+done
+
 for m in java-backend-architect.md code-reviewer.md frontend-architect.md \
          frontend-code-reviewer.md learning-doc-writer.md script-engineer.md \
          discovery-analyst.md; do
