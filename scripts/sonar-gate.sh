@@ -16,8 +16,11 @@
 #
 # Usage:
 #     sonar-gate.sh [--project-dir DIR] [--with-coverage] [--facets]
-#                   [--max-findings N] [--no-boot] [--dry-run] [-h|--help]
+#                   [--max-findings N] [--files PATH] [--no-boot] [--dry-run] [-h|--help]
 #
+#     --files     restrict findings to the repo-relative paths listed in PATH, one per line.
+#                 The count and the exit status follow the filtered set, so a project with
+#                 issues elsewhere still exits clean when the listed files are clean.
 #     --no-boot   fail instead of starting the container. For non-interactive callers,
 #                 which should not have infrastructure appear underneath them.
 #
@@ -45,13 +48,14 @@ SHOW_FACETS=0
 MAX_FINDINGS=30
 DRY_RUN=0
 NO_BOOT=0
+FILES_LIST=""
 
 EXIT_CLEAN=0
 EXIT_CANNOT_RUN=1
 EXIT_FINDINGS=2
 
 usage() {
-  sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,35p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 die() {
@@ -68,6 +72,7 @@ while [ $# -gt 0 ]; do
     --with-coverage) WITH_COVERAGE=1; shift ;;
     --facets)       SHOW_FACETS=1; shift ;;
     --max-findings) MAX_FINDINGS="${2:-30}"; shift 2 ;;
+    --files)        FILES_LIST="${2:-}"; shift 2 ;;
     --no-boot)      NO_BOOT=1; shift ;;
     --dry-run)      DRY_RUN=1; shift ;;
     *)              printf 'sonar-gate: unknown argument: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
@@ -75,6 +80,20 @@ while [ $# -gt 0 ]; do
 done
 
 command -v /usr/bin/jq >/dev/null 2>&1 || die "jq not found at /usr/bin/jq"
+
+FILES_JSON="null"
+if [ -n "$FILES_LIST" ]; then
+  [ -r "$FILES_LIST" ] || die "--files: cannot read $FILES_LIST"
+  FILES_JSON=$(/usr/bin/jq -R -s -c 'split("\n") | map(select(length > 0))' < "$FILES_LIST")
+fi
+
+# One select, used for both the count and the listing, so the number reported and the lines
+# printed can never disagree. Matching is on the whole component path, not a substring:
+# "Foo.java" must not select "FooBarTest.java".
+# shellcheck disable=SC2016  # $files is a jq variable bound by --argjson, not a shell one
+ISSUE_SELECT='.issues[]
+  | select($files == null
+           or ((.component | split(":") | last) as $p | ($files | index($p)) != null))'
 
 [ -n "$PROJECT_DIR" ] || PROJECT_DIR="$PWD"
 [ -d "$PROJECT_DIR" ] || die "not a directory: $PROJECT_DIR"
@@ -210,7 +229,18 @@ api_issues() {
     "$@"
 }
 
-TOTAL=$(api_issues --data-urlencode "ps=1" | /usr/bin/jq -r '.total // 0')
+issues_json=$(mktemp)
+trap 'rm -f "$build_log" "$issues_json"' EXIT
+api_issues --data-urlencode "ps=500" > "$issues_json"
+
+# With --files the count is of the listed files alone, so "0 issues in what you touched"
+# exits clean even while the project carries issues elsewhere. Without it, the server's own
+# total stands, which is not capped by the page size.
+if [ -n "$FILES_LIST" ]; then
+  TOTAL=$(/usr/bin/jq --argjson files "$FILES_JSON" '[ '"$ISSUE_SELECT"' ] | length' "$issues_json")
+else
+  TOTAL=$(/usr/bin/jq -r '.total // 0' "$issues_json")
+fi
 
 if [ "$SHOW_FACETS" -eq 1 ]; then
   api_issues --data-urlencode "facets=rules,impactSeverities,impactSoftwareQualities" \
@@ -246,14 +276,16 @@ if [ "$TOTAL" -eq 0 ]; then
 fi
 
 if [ "$SHOW_FACETS" -eq 0 ]; then
-  api_issues --data-urlencode "ps=500" \
-    | /usr/bin/jq -r --argjson n "$MAX_FINDINGS" '
-        [ .issues[]
-          | . + {rank: ((.impacts[0].severity // "MEDIUM") as $s
-              | if   $s == "BLOCKER" then 0 elif $s == "HIGH"   then 1
-                elif $s == "MEDIUM"  then 2 elif $s == "LOW"    then 3 else 4 end)} ]
-        | sort_by(.rank)[:$n][]
-        | "  \(.component | split(":") | last):\(.line // 0) [\(.rule)] \(.message)"'
+  # The select runs before sort_by and the cap. Filtering after them drops a listed file's
+  # finding whenever more than MAX_FINDINGS issues outrank it, and reports clean.
+  /usr/bin/jq -r --argjson files "$FILES_JSON" --argjson n "$MAX_FINDINGS" \
+    '[ '"$ISSUE_SELECT"'
+       | . + {rank: ((.impacts[0].severity // "MEDIUM") as $s
+           | if   $s == "BLOCKER" then 0 elif $s == "HIGH"   then 1
+             elif $s == "MEDIUM"  then 2 elif $s == "LOW"    then 3 else 4 end)} ]
+     | sort_by(.rank)[:$n][]
+     | "  \(.component | split(":") | last):\(.line // 0) [\(.rule)] \(.message)"' \
+    "$issues_json"
   if [ "$TOTAL" -gt "$MAX_FINDINGS" ]; then
     printf '  ... and %s more. Full list: %s/project/issues?id=%s\n' \
       "$((TOTAL - MAX_FINDINGS))" "$HOST_URL" "$PROJECT_KEY"

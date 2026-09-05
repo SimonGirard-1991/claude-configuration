@@ -13,8 +13,10 @@
 # alone (which cannot see untracked files at all): it could block on a file it had not read,
 # or pass one it never looked at.
 #
-# Findings are filtered to that set. A repo with pre-existing issues would otherwise block
-# every turn on somebody else's work, which teaches you to route around the gate.
+# That set is handed to the script as --files, which filters inside its own jq pipeline before
+# ranking and capping. Filtering the script's printed output here instead was a false pass: the
+# script caps at 30 findings, so on a project with more pre-existing issues a real finding in a
+# changed file fell past the cap and the hook reported nothing to fix.
 #
 # Suppression is justified, not forbidden. Sonar is wrong often enough that banning NOSONAR
 # outright would make the gate something to argue with rather than use. A suppression passes
@@ -110,7 +112,7 @@ out=$(mktemp); err=$(mktemp); pat=$(mktemp)
 trap 'rm -f "$out" "$err" "$pat"' EXIT
 printf '%s\n' "$changed" > "$pat"
 
-"$GATE" --project-dir "$repo" --no-boot >"$out" 2>"$err"
+"$GATE" --project-dir "$repo" --no-boot --files "$pat" >"$out" 2>"$err"
 status=$?
 
 if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
@@ -121,14 +123,11 @@ fi
 
 gate_failed=0
 grep -q '^QUALITY GATE: FAILED' "$out" && gate_failed=1
-mine=$(grep -F -f "$pat" "$out" 2>/dev/null | grep -E '^[[:space:]]+[^[:space:]]+:[0-9]+ \[' || true)
+mine=$(grep -E '^[[:space:]]+[^[:space:]]+:[0-9]+ \[' "$out" || true)
 count=$(printf '%s' "$mine" | grep -c . || true)
 
-if [ "$gate_failed" -eq 0 ] && [ "$count" -eq 0 ]; then
+if [ "$status" -eq 0 ]; then
   rm -f "$counter"
-  if [ "$status" -eq 2 ]; then
-    printf 'sonar gate: findings exist on this project, none in the files this turn changed.\n' >&2
-  fi
   [ -n "$good" ] && printf 'SONAR GATE: clean. New justified suppression(s), report these:\n%s' "$good" >&2
   exit 0
 fi
