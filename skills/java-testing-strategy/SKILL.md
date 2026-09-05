@@ -76,6 +76,7 @@ matching file rather than answering from memory.
 | Test a repository or a Kafka consumer/producer | `references/layers-db-messaging.md` | Testcontainers Postgres (never H2), Testcontainers Kafka with a minimal context, awaiting async without `Thread.sleep` |
 | Test a controller, a cross-team contract, or architecture | `references/layers-web-contract-architecture.md` | `@WebMvcTest` slices, Pact / Spring Cloud Contract at boundaries, ArchUnit and Spring Modulith `verify()` |
 | Pick libraries, build test data, wire CI, or decide what to do with a flaky test | `references/tooling-and-ci.md` | JUnit 5 / AssertJ / Testcontainers / Mockito defaults, test data builders, CI staging and parallelism, the flake-quarantine policy (quarantine with a deadline, then delete — never retry-on-flake) |
+| Write tests a SonarQube gate will accept | `references/sonar-clean-idioms.md` | One throwing call per `assertThrows` (S5778), `@Mock` fields over `mock()` (S9015), chaining `assertThat` on one subject (S5853), and how to justify a suppression when a rule is wrong |
 
 For code-ready test templates, load the `hexagonal-module-bootstrap` skill and read
 its own `references/tests-*.md` files — those templates live in that skill's
