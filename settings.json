@@ -145,6 +145,18 @@
           }
         ]
       }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "java-backend-architect",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/simongirard/.claude/hooks/sonar-gate-on-stop.sh",
+            "timeout": 400
+          }
+        ]
+      }
     ]
   },
   "enabledPlugins": {

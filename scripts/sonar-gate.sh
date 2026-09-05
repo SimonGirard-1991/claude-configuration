@@ -16,7 +16,10 @@
 #
 # Usage:
 #     sonar-gate.sh [--project-dir DIR] [--with-coverage] [--facets]
-#                   [--max-findings N] [--dry-run] [-h|--help]
+#                   [--max-findings N] [--no-boot] [--dry-run] [-h|--help]
+#
+#     --no-boot   fail instead of starting the container. For non-interactive callers,
+#                 which should not have infrastructure appear underneath them.
 #
 # Environment:
 #     SONAR_HOST_URL                  default http://localhost:9000
@@ -25,8 +28,8 @@
 #     SONAR_CONTAINER                 default sonar-local
 #     SONAR_IMAGE                     default sonarqube:26.8.0.126808-community
 #
-# Exit status: 0 clean, 1 could not run, 2 findings. The distinction matters — the
-# SubagentStop hook blocks on 2 and reports "gate is OFF" on 1.
+# Exit status: 0 clean, 1 could not run, 2 findings or a failed quality gate. The
+# distinction matters — the SubagentStop hook blocks on 2 and reports "gate is OFF" on 1.
 
 set -euo pipefail
 
@@ -41,13 +44,14 @@ WITH_COVERAGE=0
 SHOW_FACETS=0
 MAX_FINDINGS=30
 DRY_RUN=0
+NO_BOOT=0
 
 EXIT_CLEAN=0
 EXIT_CANNOT_RUN=1
 EXIT_FINDINGS=2
 
 usage() {
-  sed -n '2,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 die() {
@@ -64,6 +68,7 @@ while [ $# -gt 0 ]; do
     --with-coverage) WITH_COVERAGE=1; shift ;;
     --facets)       SHOW_FACETS=1; shift ;;
     --max-findings) MAX_FINDINGS="${2:-30}"; shift 2 ;;
+    --no-boot)      NO_BOOT=1; shift ;;
     --dry-run)      DRY_RUN=1; shift ;;
     *)              printf 'sonar-gate: unknown argument: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
@@ -118,6 +123,11 @@ sonar_status() {
 
 ensure_sonar_up() {
   [ "$(sonar_status)" = "UP" ] && return 0
+
+  # Booting is a foreground act with a ~20s cost and a container left running afterwards.
+  # Callers that are not a person at a terminal (the SubagentStop hook) pass --no-boot and
+  # get told to run this by hand once, rather than having infrastructure appear mid-turn.
+  [ "$NO_BOOT" -eq 0 ] || die "SonarQube is down at $HOST_URL, run sonar-gate.sh once to start it"
 
   command -v docker >/dev/null 2>&1 || die "SonarQube is not reachable at $HOST_URL and docker is not installed"
   docker info >/dev/null 2>&1 || die "SonarQube is not reachable at $HOST_URL and the docker daemon is not running"
@@ -209,9 +219,30 @@ if [ "$SHOW_FACETS" -eq 1 ]; then
                       (.values[]? | select(.count > 0) | "  \(.count)\t\(.val)")'
 fi
 
-if [ "$TOTAL" -eq 0 ]; then
+# A gate can fail on conditions no issue represents — coverage and duplication are metrics,
+# not findings — so issue count alone is not a verdict. Only evaluated with --with-coverage:
+# without a test run the coverage condition is 0% and would fail every default-mode scan.
+GATE_FAILED=0
+if [ "$WITH_COVERAGE" -eq 1 ]; then
+  gate=$(curl -s -u "$TOKEN:" -G "$HOST_URL/api/qualitygates/project_status" \
+           --data-urlencode "projectKey=$PROJECT_KEY")
+  if [ "$(printf '%s' "$gate" | /usr/bin/jq -r '.projectStatus.status // empty')" = "ERROR" ]; then
+    GATE_FAILED=1
+    echo "QUALITY GATE: FAILED"
+    printf '%s' "$gate" | /usr/bin/jq -r '.projectStatus.conditions[]?
+      | select(.status == "ERROR")
+      | "  \(.metricKey) is \(.actualValue), needs \(.comparator | ascii_downcase) \(.errorThreshold)"'
+  fi
+fi
+
+if [ "$TOTAL" -eq 0 ] && [ "$GATE_FAILED" -eq 0 ]; then
   log "clean: 0 issues on $PROJECT_KEY"
   exit "$EXIT_CLEAN"
+fi
+
+if [ "$TOTAL" -eq 0 ]; then
+  log "0 issues, but the quality gate failed on $PROJECT_KEY"
+  exit "$EXIT_FINDINGS"
 fi
 
 if [ "$SHOW_FACETS" -eq 0 ]; then
