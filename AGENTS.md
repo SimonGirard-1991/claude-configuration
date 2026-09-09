@@ -57,6 +57,15 @@ says explicitly that the external reviewer was skipped — no retry loop.
   and OpenAPI YAML at the same time — a rule stating that a schema change *is* a code
   change cannot fire from a `**/*.java` scope, because the file being edited is the
   schema. 36 → 93 lines, against the architect's 424.
+- **`rules/frontend.md` added; `code-reviewer` gains a frontend lens** (2026-09-09).
+  The first pass retired both frontend agents with no replacement, on 0 spawns in the
+  audit window — but 0 spawns meant "has not come up lately", not "will not". Restored on
+  Simon's call: `frontend-architect`'s owned standards became a path-scoped rule, and
+  `frontend-code-reviewer`'s six review dimensions became a **frontend lens** in
+  `code-reviewer.md`, mirroring the standalone-script lens already there. Without that
+  second half the rule would tell a session what to build while the only surviving
+  reviewer judged a `.tsx` diff by backend axes. 658 agent lines → 161 rule lines plus a
+  43-line lens.
 - **The calibration tier taxonomy is shared vocabulary**, not an enforced contract:
   *throwaway / internal tool / production service / critical financial system*. It
   originates in `code-reviewer` ("Calibrate your bar") and is emitted by the `scoping`

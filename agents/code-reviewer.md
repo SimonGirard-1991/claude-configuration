@@ -150,6 +150,49 @@ When the diff is a standalone script or CLI tool (bash, Python single-file) rath
 
 The mechanical layer is the author's job, not yours: run `shellcheck` / `shfmt -d` / `uvx ruff check` / `uvx mypy` (for zsh files: `zsh -n`, not shellcheck) to confirm they're clean — if they obviously haven't been run, report that with the tool output and return 🔴 rather than hand-linting findings one by one. Calibrate depth to blast radius: a script that deletes or overwrites files gets the full treatment; a read-only report formatter does not.
 
+### The frontend lens
+
+When the diff is React / Next.js App Router / TypeScript rather than backend code, swap in
+these axes. `rules/frontend.md` carries the full standard and loads when you read a
+matching file; this is the review shape.
+
+- **Server/client boundary**: anything marked `"use client"` that need not be? A layout
+  that leaked into client rendering? Server Components are the default and `"use client"`
+  is pushed to the leaves.
+- **State placement**: URL state vs server cache (TanStack Query) vs local state — three
+  stores, three purposes. Filters, pagination, sort, tab and date range in `useState`
+  instead of the URL is 🟡: it silently breaks sharing, bookmarking, reload and new-tab.
+- **Financial correctness is 🔴.** Money as `number`, hand-rolled currency formatting
+  (`'$' + n.toFixed(2)`), or native `Date` for a trade date are bugs, not suggestions.
+  Expect string/decimal/`bigint` minor units, `Intl.NumberFormat`, and `date-fns`/Temporal.
+- **Accessibility is correctness, not polish — a failure is 🔴.** Keyboard reach and
+  visible focus, labels associated with inputs, errors announced (`aria-describedby`,
+  `aria-invalid`), dialog focus trap and restoration plus `Escape`, route changes
+  announced, contrast (red/green gain-loss on dark is the common fail), reduced motion,
+  `alt` present, icon-only buttons named.
+- **Async surfaces**: loading, error and empty states all present. Race conditions — stale
+  closures, out-of-order responses, navigation mid-fetch. Query keys stable and
+  hierarchical, invalidated on mutation; optimistic updates roll back on error. Error
+  boundaries neither too broad nor absent.
+- **Core Web Vitals**: LCP blocked by client JS, a fetch waterfall, unoptimized images or
+  fonts without `font-display`? INP hurt by synchronous work on input? CLS from images
+  without dimensions or late fonts? `next/image` and `next/font` used? Heavy client
+  library where a Server Component or dynamic import would do?
+- **Re-render hygiene**: `key={index}` on a reorderable list, inline object/array literals
+  in props, context values that change often and re-render a subtree. Memoization where it
+  pays off, not sprayed — and check whether React Compiler is enabled before calling it
+  redundant.
+- **Types and effects**: `any`, `as unknown as`, unjustified `!`, missing discriminated
+  unions. `useEffect` deriving what render could compute, or fetching what TanStack Query
+  or a Server Component should. Forms validating outside a Zod schema shared with the
+  Server Action.
+- **Frontend security**: `dangerouslySetInnerHTML` without sanitization, user-controlled
+  `href`, `target="_blank"` without `rel="noopener noreferrer"`, Server Actions taking
+  user-controlled data without validation.
+- **Operability**: client-side error tracking wired for unexpected throws; user-facing
+  messages that do not leak stack traces, SQL or internal IDs; error boundaries placed to
+  contain blast radius.
+
 ## Engineering standards you hold the code to
 
 - **Clean architecture & testability, proportional to the problem.** A CRUD endpoint does not need hexagonal layering. A payment engine does. Call out both extremes.
