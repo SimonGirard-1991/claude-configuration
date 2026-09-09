@@ -1,5 +1,11 @@
 #!/bin/bash
-# PostToolUse on Edit|Write: keep README.md honest about what this repo contains.
+# Keeps README.md honest about what this repo contains.
+#
+# Two calling conventions. With no arguments it reads a hook payload on stdin and
+# takes `.tool_input.file_path` — the PostToolUse shape. With arguments it checks
+# when any of those paths is inside the repo, which is how hooks/on-stop-validate.sh
+# drives it over a turn's whole changed set. The checks themselves read the repo, not
+# the paths: a path only decides whether they run at all.
 #
 # README is the only document describing this setup that nothing validated, and it
 # is therefore the only one that rotted. The four drifts found on 2026-08-13 had
@@ -28,11 +34,23 @@
 ROOT="${CLAUDE_CONFIG_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 README="${CLAUDE_README:-$ROOT/README.md}"
 
-f=$(/usr/bin/jq -r '.tool_input.file_path // empty' 2>/dev/null)
-case "$f" in
-  "$ROOT"/*) ;;
-  *) exit 0 ;;
-esac
+if [ "$#" -gt 0 ]; then
+  candidates=("$@")
+else
+  candidates=()
+  while IFS= read -r line; do
+    [ -n "$line" ] && candidates+=("$line")
+  done < <(/usr/bin/jq -r '.tool_input.file_path // empty' 2>/dev/null)
+fi
+[ "${#candidates[@]}" -gt 0 ] || exit 0
+
+in_repo=""
+for f in "${candidates[@]}"; do
+  case "$f" in
+    "$ROOT"/*) in_repo=1; break ;;
+  esac
+done
+[ -n "$in_repo" ] || exit 0
 
 # A hook that disables itself in silence is worse than no hook: settings.json still
 # advertises the gate while drift accumulates. Every bail-out below says so.

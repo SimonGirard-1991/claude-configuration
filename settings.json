@@ -92,22 +92,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/simongirard/.claude/hooks/format-on-edit.sh",
-            "timeout": 30
-          },
-          {
-            "type": "command",
             "command": "/Users/simongirard/.claude/hooks/validate-agent-contracts.sh",
-            "timeout": 15
-          },
-          {
-            "type": "command",
-            "command": "/Users/simongirard/.claude/hooks/validate-skill-tree.sh",
-            "timeout": 20
-          },
-          {
-            "type": "command",
-            "command": "/Users/simongirard/.claude/hooks/validate-readme.sh",
             "timeout": 15
           }
         ]
@@ -115,8 +100,28 @@
     ],
     "SubagentStop": [
       {
-        "matcher": "java-backend-architect",
         "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/simongirard/.claude/hooks/on-stop-validate.sh",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/simongirard/.claude/hooks/on-stop-validate.sh",
+            "timeout": 60
+          },
+          {
+            "type": "command",
+            "command": "/Users/simongirard/.claude/hooks/format-on-stop.sh",
+            "timeout": 60
+          },
           {
             "type": "command",
             "command": "/Users/simongirard/.claude/hooks/sonar-gate-on-stop.sh",

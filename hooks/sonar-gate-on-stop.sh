@@ -1,10 +1,15 @@
 #!/bin/bash
-# SubagentStop: refuse to let java-backend-architect finish with new Sonar findings.
+# Stop: refuse to let a turn finish with new Sonar findings.
 #
-# The agent's Self-Review Loop spawns `code-reviewer` — a model checking a model. That is the
-# wrong instrument for a property an analyzer decides. This hook supplies the missing oracle:
-# scripts/sonar-gate.sh runs the real Sonar ruleset and exit 2 feeds the findings back, so the
-# turn cannot end dirty.
+# It hung off SubagentStop matching java-backend-architect until that agent was retired into
+# rules/java.md; the gate belongs on the session itself now, which is where the Java work
+# actually happens. Nothing in the body changed: the trigger already read `.cwd` from the
+# payload and is inert unless the repo carries a `.sonar-gate` file.
+#
+# The rule it enforces is one a model cannot check itself. A self-review loop spawning
+# `code-reviewer` is a model checking a model, and that is the wrong instrument for a property
+# an analyzer decides. scripts/sonar-gate.sh runs the real Sonar ruleset and exit 2 feeds the
+# findings back, so the turn cannot end dirty.
 #
 # One file set, computed once, used three times. The trigger, the suppression scan and the
 # findings filter all read `git diff` against the fork point UNION `ls-files --others`, so an
