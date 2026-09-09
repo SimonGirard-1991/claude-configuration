@@ -1,8 +1,3 @@
-# Cross-project notes
-
-- rtk compresses Bash tool output via a PreToolUse hook (`hooks/rtk-rewrite.sh`) — it rewrites commands for you, so run commands normally; don't hand-prefix `rtk`.
-- To recover output cut by a `... (N lines truncated)` marker, re-run the command through `rtk proxy <original command>` (prompts for approval) or Read the underlying files.
-
 # Code comments
 
 - **The default is none.** A comment earns its place only when the code cannot carry the information — a non-obvious constraint, a rejected alternative, an external quirk, an invariant a reader would otherwise break. Never restate what the code already says.
