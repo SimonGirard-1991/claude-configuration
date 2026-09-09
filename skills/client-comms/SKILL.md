@@ -5,7 +5,7 @@ description: Use when writing anything a client or a non-technical internal stak
 
 # Client Communications — register and structures
 
-This skill encodes how to write for clients: people who are paying for outcomes, reading on a phone between meetings, and judging professionalism by clarity, not vocabulary. It pairs with the `discovery-analyst` agent (which produces the scoping substance) — this skill governs the *wording* of anything that crosses the client boundary.
+This skill encodes how to write for clients: people who are paying for outcomes, reading on a phone between meetings, and judging professionalism by clarity, not vocabulary. It pairs with the `scoping` skill (which produces the scoping substance) — this skill governs the *wording* of anything that crosses the client boundary.
 
 ## First decide: is a client (or a non-technical stakeholder) reading this?
 

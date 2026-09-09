@@ -86,18 +86,6 @@
         ]
       }
     ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/Users/simongirard/.claude/hooks/validate-agent-contracts.sh",
-            "timeout": 15
-          }
-        ]
-      }
-    ],
     "SubagentStop": [
       {
         "hooks": [

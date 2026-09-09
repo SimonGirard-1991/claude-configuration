@@ -1,234 +1,86 @@
-# Agents — inter-agent contracts and maintenance notes
+# Agents — maintainer notes
 
-This file documents the contracts between agents in `~/.claude/agents/`.
-Its primary audience is the human maintainer (you), to avoid silent drift
-when editing one agent without remembering what the other one assumes.
-
-`AGENTS.md` is a recognized convention (originated with OpenAI/Codex, now
-honored by several agentic tools including Claude Code) — assume this file
-may be auto-loaded into agent context. Keep the contents safe to load:
-factual contract notes, no secrets, no private commentary.
-
-Edit this file whenever you change a contract surface (output format,
-invocation protocol, expected inputs) of any agent that another agent
-invokes.
-
----
+Claude Code reads `CLAUDE.md`, not `AGENTS.md`. Nothing here loads into a session; this
+file exists so a future maintainer can see why the setup is shaped the way it is.
 
 ## Agents in this setup
 
 | Agent | Role | Invoked by |
 |---|---|---|
-| `java-backend-architect` | Staff-level Java backend architect: design, implement, review Java code. | User directly, or auto-routed by the main assistant based on the agent's `description`. |
-| `code-reviewer` | Staff-level code reviewer: read-only review of a diff. | `java-backend-architect` and `script-engineer` (Self-Review Loop) via the `Agent` tool, or user directly. |
-| `frontend-architect` | Staff-level frontend architect (React 19 / Next.js 15 / TS strict): design, implement, review. | User directly, or auto-routed by the main assistant based on the agent's `description`. |
-| `frontend-code-reviewer` | Staff-level frontend reviewer: read-only review of a frontend diff. | `frontend-architect` (Self-Review Loop) via the `Agent` tool, or user directly. |
-| `learning-doc-writer` | Produces pandoc-ready learning docs (Markdown → PDF via LuaLaTeX). | User directly. Leaf agent — invokes no other agent and is invoked by none. |
-| `script-engineer` | Staff-level toolsmith: reusable personal scripts and CLI tools (Bash/Python), zsh configuration work, remote-Linux-target scripts. | User directly, or auto-routed by the main assistant based on the agent's `description`. |
-| `discovery-analyst` | Delivery scoping, freelance and corporate: discovery questions, scoping docs with out-of-scope lists, estimates, scope-change and hard-commitment assessment, calibration tier declaration. | User directly, or auto-routed by the main assistant based on the agent's `description`. Leaf agent — invokes no other agent; loads the `client-comms` skill for sponsor-facing register. |
+| `code-reviewer` | Staff-level review of a diff: design, correctness, operability, code-level. Severity-tagged 🔴/🟡/🔵, verdict ✅/⚠️/🔴. | The user directly, or a session running the self-review loop in `rules/java.md`. |
+| `learning-doc-writer` | Pandoc-ready learning documents, with a mandatory independent adversarial review before hand-back. | The user directly, or auto-routed on its description. |
 
----
+Both are `model: inherit`. The one deliberate exception is inside
+`learning-doc-writer`: its fetch-only source-gathering spawns pass `sonnet`, because a
+gatherer opens an already-identified source and reports what it says. Judgment spawns
+never take the flag (decided 2026-08-13).
 
-## Contract between architects and their reviewers
+## Reviewer memory protocol
 
-Three instances of the same contract: `java-backend-architect` → `code-reviewer`,
-`frontend-architect` → `frontend-code-reviewer`, and `script-engineer` → `code-reviewer`
-(the java and script pairs share the same reviewer). The surfaces below are identical
-for all pairs unless noted; "the architect" / "the reviewer" mean whichever pair is active.
+`memory: user` is set on both agents, so Claude Code injects the generic memory
+instructions and the `MEMORY.md` index itself. Only the setup-specific half lives in
+`agents/code-reviewer.md` § Memory protocol, and it is this:
 
-- **Reviewer receives**: diff scope (paths or git range), change summary, calibration, the invocation marker (surface 6), project conventions (via `CLAUDE.md`).
-- **Reviewer returns**: issues categorized 🔴/🟡/🔵, final verdict ✅/⚠️/🔴.
-- **Architect iterates** on 🔴 and 🟡; judges 🔵 on merit.
-- **Cap**: 3 iterations, then escalate to user.
+- Prompt carries `Invocation: self-review loop`, or context otherwise shows an agent
+  drove the invocation → **never save**. End with a **Proposed memory** note; the
+  invoking session relays it verbatim and records it only on the user's approval.
+- Direct user invocation with explicit feedback → the reviewer saves it itself.
+- Ambiguous → fail closed, propose.
 
-### Contract surfaces (break these and the other side breaks silently)
+The reason is narrow and worth keeping: in a loop the only validator present is another
+model, and architect pushback must not be laundered into reviewer calibration without a
+human seeing it. Writes are confined to `agent-memory/code-reviewer/` — never the repo,
+never config, never through `Bash` redirects.
 
-1. **Severity taxonomy**: 🔴 Critical, 🟡 Important, 🔵 Suggestion.
-   Defined in each reviewer under "Identify issues by severity".
-   Consumed by each architect under "Self-Review Loop → Read the verdict".
+Edge cases: a ⚠️ verdict carrying only 🔵 issues may return to the user unchanged, since
+🔵 is judged on merit. A failed reviewer spawn falls back to a structured self-review and
+says explicitly that the external reviewer was skipped — no retry loop.
 
-2. **Verdict taxonomy**: ✅ Looks good, ⚠️ Needs minor changes, 🔴 Needs revision.
-   Emitted by each reviewer under "Output Format → Verdict".
-   Consumed by each architect under "Self-Review Loop → Read the verdict".
+## Decision log
 
-3. **Invocation mechanism**: `Agent` tool with `subagent_type: "code-reviewer"`
-   (`java-backend-architect`, `script-engineer`) resp. `"frontend-code-reviewer"`
-   (`frontend-architect`). Called from each architect under
-   "Self-Review Loop → Protocol". If this name or mechanism changes, update both agents.
-   - History: the tool was named `Task` until Claude Code v2.1.63 renamed it to
-     `Agent` (`Task` remains a documented alias, so the loop never broke). Both
-     architects were migrated to the canonical name on 2026-07-08 (frontmatter
-     `tools:` and Self-Review Loop text). Nested spawning (subagent → subagent)
-     is officially supported: listing `Agent` in a subagent's `tools` enables it,
-     per the sub-agents docs.
-
-4. **Project conventions discovery**: reviewers pick up project-specific
-   conventions via Claude Code's standard `CLAUDE.md` resolution (user scope at
-   `~/.claude/CLAUDE.md`, parent directories, and repo root, composed per Claude
-   Code's documented precedence). Architects do NOT need to pass
-   conventions inline — the reviewer fetches them itself.
-
-5. **Reviewer memory protocol**: reviewer memory writes are gated by invocation
-   context. In the self-review loop (detected via surface 6) the reviewer never
-   saves — it may end the review with an optional **Proposed memory** note; the
-   architect relays the note verbatim in its hand-back and, on explicit user
-   approval, records it unchanged into the reviewer's memory directory
-   (`agent-memory/<reviewer>/`: memory file + `MEMORY.md` index line). Invoked
-   directly by the user with explicit feedback, the reviewer saves its own
-   memories. Ambiguous context fails closed to propose-only.
-
-6. **Invocation marker**: each architect's Self-Review Loop prompt includes the
-   line `Invocation: self-review loop, iteration N of 3`. The reviewers' memory
-   rules key off it. If the wording changes, update all three architects and both
-   reviewers.
-
-7. **Calibration lens line** (script pair only): `script-engineer`'s Self-Review
-   Loop prompt includes `Calibration: … apply the standalone-script lens.` (zsh
-   variant: `… apply the standalone-script lens, zsh dialect notes.`), which keys
-   into the `code-reviewer` section "The standalone-script lens". Rename either
-   side and the reviewer silently reviews scripts against service axes instead.
-   The java and frontend pairs pass a plain criticality calibration; no lens
-   coupling exists there.
-
-8. **Comment doctrine**: each of the three code-writing agents carries the section
-   `## Comments — the default is none`, identical wording in all three — it is one
-   rule stated three times, not three rules. Since 2026-08-13 `~/.claude/CLAUDE.md`
-   § Code comments states it a fourth time, at user scope. The agent copies stay
-   regardless: only they are validated, and README's standing instruction is to keep
-   CLAUDE.md minimal, so that copy is one trim away from vanishing silently. Both
-   reviewers carry the matching
-   **Comment noise** bullet in their code-level layer, which is what makes the
-   self-review loop enforce it rather than merely assert it. Keep the two halves
-   together: with the doctrine alone, breaches ship unopposed; with the reviewer
-   bullet alone, the architects were never told the rule they're being judged on.
-   The validator greps the heading and the bullet, so reword either and it fires.
-
-### Shared vocabulary (soft coupling, not hook-enforced)
-
-The calibration tier taxonomy — *throwaway / internal tool / production service /
-critical financial system* — originates in the reviewers ("Calibrate your bar")
-and is emitted by `discovery-analyst` in scoping documents (§ Calibration tier),
-so a project's business tier flows into architect/reviewer calibration during the
-build. If the reviewer taxonomy is reworded, update `discovery-analyst.md` to
-match, or scoping docs stop speaking the tier language the reviewers calibrate
-against.
-
-### Edge cases worth remembering
-
-- **Verdict ⚠️ with only 🔵 issues**: the architect may return to the user without
-  changes, because 🔵 is judged on merit. This is intentional — not a bug.
-- **No invocation marker, ambiguous context**: the reviewer treats it as loop
-  context — propose-only, no memory writes. Fail closed.
-- **Reviewer invocation failure** (Agent tool error, subagent unavailable, timeout):
-  the architect falls back to a structured self-review against its own
-  "When Reviewing" checklist and tells the user explicitly that the external
-  reviewer was skipped. No retry loop.
-- **Override protocol**: the architect is allowed to push back on the reviewer
-  when a suggestion conflicts with an explicit decision in the architect's
-  prompt (e.g. the reviewer suggests a pattern the architect's prompt explicitly
-  refuses — see `java-backend-architect.md` § Boilerplate Philosophy or
-  `frontend-architect.md` § "Pushing back on the reviewer" for standing
-  refusals). When overriding, the architect must state the
-  override in the next review prompt so the reviewer doesn't re-raise the same
-  point.
-
----
-
-## Maintenance checklist
-
-Since 2026-07-08 the mechanical parts of this checklist are enforced by
-`~/.claude/hooks/validate-agent-contracts.sh`, a PostToolUse hook that runs on
-every edit under `agents/` or to this file and feeds drift back to the editing
-session (exit 2). It checks surfaces 1–3 and 6–8 plus frontmatter sanity; the
-judgment items below still need a human. If a contract surface legitimately
-changes, update AGENTS.md **and** the validator in the same commit.
-
-When editing `java-backend-architect.md` (same checklist for `frontend-architect.md`
-and `script-engineer.md`):
-- [ ] If you change how it invokes `code-reviewer`, update the Contract section above.
-- [ ] If you change the severity or verdict it consumes, update `code-reviewer.md` to match.
-- [ ] If you add a new sub-agent invocation, add the contract here.
-- [ ] If you reword the comment doctrine, reword it in all three agents and re-check the
-      reviewers' **Comment noise** bullet still matches (surface 8).
-
-When editing `code-reviewer.md` (same checklist for `frontend-code-reviewer.md`):
-- [ ] If you change the output format (severity emojis, verdict labels, section headings
-      that the architect parses), update `java-backend-architect.md` and the Contract above.
-      `code-reviewer` has two architect consumers (`java-backend-architect`,
-      `script-engineer`) — check both.
-- [ ] If you rename or remove "The standalone-script lens" section, update
-      `script-engineer.md`'s calibration line and the validator (surface 7).
-- [ ] If you change the Freshness protocol or Tool access rules, check that nothing in
-      `java-backend-architect.md` assumes the old behavior.
-- [ ] If you change the memory path, update that too in the agent prompt.
-
-When editing `AGENTS.md` itself:
-- [ ] When adding a new agent, update the Agents table and add a Contract section if it
-      is invoked by (or invokes) another agent.
-- [ ] When the invocation mechanism changes globally (e.g. the v2.1.63 `Task` →
-      `Agent` rename, migrated here 2026-07-08), update the Contract section for
-      every affected agent.
-
----
-
-## Decisions
-
-- **Fetch-only spawns take Sonnet; judgment spawns never do** (decided 2026-08-13).
-  Every agent here stays `model: opus`, and that is not an oversight — the mechanical
-  work already left the model layer entirely (both hook validators, `scripts/lint_skills.py`,
-  the md2pdf build script, the quiz builder), so the residue left to the agents is
-  uniformly judgment. The one exception is a sub-agent that opens an
-  already-identified source and reports what it says: `learning-doc-writer`'s parallel
-  source-gathering, the only such spawn in the tree today. Both reviewers are excluded
-  in every loop — a reviewer out of its depth does not return "unsure", it returns a
-  confident ✅, and it is the last gate before work ships. Test any new spawn the same
-  way: is the answer sitting in the source, or does someone have to judge it?
-
-- **Comments default to none in generated code** (decided 2026-08-11; surface 8).
-  The agents were over-commenting badly — narration on obvious code, rationale
-  paragraphs above ordinary classes. Three causes, fixed together because any one
-  of them alone would have re-established the behaviour: (a) no agent had a comment
-  rule at all, so the default was the chat-reply instinct to explain generously;
-  (b) `skills/hexagonal-module-bootstrap` — the skill whose whole purpose is
-  code-ready templates — carried 119 explanatory comment lines plus 13 `// Rule:`
-  lines *inside* its Java fences, against ≤ 1 for every other skill in the tree, so
-  copying a template meant copying its comment density; (c) both reviewers were
-  silent on comments, so the self-review loop never pushed back. The templates now
-  keep rationale in the prose around each block rather than inside it, which is
-  what makes the fix structural: what you copy is what ships. Related: the
-  `// Rule:` convention and its two "strip these before committing" instructions
-  in that skill are retired — they only ever covered the marked minority.
-- **Reviewers hold conditional memory-write access** (decided 2026-07-08;
-  supersedes the memory-file part of the 2026-04-23 decision below). `Write`/`Edit`
-  are back in both reviewers' tools, prompt-scoped to their own memory directory
-  plus `/tmp` scratch. Saving is gated by invocation context: direct user
-  invocation with explicit feedback → the reviewer saves itself; self-review loop
-  (marker, surface 6) → propose-only, architect records on user approval
-  (surface 5); ambiguous → propose-only. Rationale: the April rule conflated
-  "don't modify the reviewed artifact" (still absolute — see "Hard rule: never
-  mutate tracked state" in both reviewers) with "don't keep your own notebook",
-  which froze the reviewers' learning loop. The risk the April rule actually
-  guarded against — architect pushback laundered into reviewer calibration
-  without human validation — remains blocked by the loop-context ban.
-- **`code-reviewer` is read-only** (decided 2026-04-23; superseded 2026-07-08 for
-  memory files by the decision above — still in force for repo, config, and all
-  tracked state). Original rule: no `Write`, no `Edit`, no file mutation of any
-  kind, including via `Bash` redirects. The `memory: user` frontmatter entry
-  stays in the YAML so the harness injects prior memory into the reviewer's
-  context.
-  - Follow-up history: the "How to save memories" mechanics were stripped to
-    read-only guidance on 2026-07-08, then reinstated the same day in conditional
-    form when the superseding decision landed.
-  - Caveat: the precise semantics of the `memory: user` frontmatter key are
-    *assumed* here to govern memory-context injection. This has not been verified
-    against authoritative Claude Code subagent docs — verify before relying on it
-    for anything load-bearing.
-
----
+- **The architect layer is retired** (2026-09-09). `java-backend-architect` became
+  `rules/java.md`, a path-scoped rule that loads only when a Java file is read;
+  `script-engineer` became `rules/shell.md`; `discovery-analyst` became the manually
+  invoked `scoping` skill; the two frontend agents were deleted outright. Evidence over
+  the preceding month: 67 `code-reviewer` spawns, 3 `learning-doc-writer`, 1
+  `java-backend-architect`, 0 for the other four — while seven agent descriptions cost
+  ~3,170 words in every session's startup context, and Java skills were being loaded
+  from main sessions rather than from the architect. `hooks/validate-agent-contracts.sh`
+  went with them: it existed to police architect↔reviewer coupling that no longer has
+  two sides. Recover any of them from tag `pre-best-practices-2026-09-07`.
+- **The calibration tier taxonomy is shared vocabulary**, not an enforced contract:
+  *throwaway / internal tool / production service / critical financial system*. It
+  originates in `code-reviewer` ("Calibrate your bar") and is emitted by the `scoping`
+  skill, so a project's business tier flows into review calibration during the build.
+  Reword it in one place and the other stops speaking the same language.
+- **Fetch-only spawns take Sonnet; judgment spawns never do** (2026-08-13). A sub-agent
+  that opens an already-identified source and reports what it says is retrieval. Anything
+  that judges — a reviewer above all — is the opposite job: out of its depth, a reviewer
+  does not return "unsure", it returns a confident ✅, and it is the last gate before work
+  ships.
+- **Comments default to none in generated code** (2026-08-11). The rule lives in
+  `CLAUDE.md` § Code comments at user scope, and `code-reviewer` carries the matching
+  **Comment noise** bullet in its code-level layer — which is what makes the review
+  enforce it rather than merely assert it. Keep both halves: doctrine alone and breaches
+  ship unopposed; reviewer bullet alone and nobody was told the rule they are judged on.
+  The fix was structural — `skills/hexagonal-module-bootstrap` had carried 119
+  explanatory comment lines inside its Java fences, so copying a template meant copying
+  its comment density.
+- **Reviewers hold conditional memory-write access** (2026-07-08, superseding the
+  memory-file half of a 2026-04-23 read-only rule). The April rule conflated "don't
+  modify the reviewed artifact" — still absolute — with "don't keep your own notebook",
+  which froze the reviewer's learning loop. The risk it actually guarded against stays
+  blocked by the loop-context ban above.
 
 ## Known open questions
 
-- **Test-running discipline**: the reviewer has the ability to run tests, but the
-  architect is responsible for ensuring tests pass before invocation. Current
-  behavior is non-deterministic (reviewer chooses whether to re-run). Acceptable
-  for now; revisit if review latency becomes a concern.
+- **Test-running discipline**: the reviewer can run tests, but the invoking session is
+  responsible for green tests before invocation. Whether the reviewer re-runs them is
+  non-deterministic. Acceptable; revisit if review latency becomes a concern.
+- **Do path-scoped rules fire when a file is read through Bash?** `rules/java.md` earns
+  its place only if it loads. The docs say path-scoped rules trigger when Claude *reads*
+  a matching file, and under `defaultMode: auto` the harness steers reads toward `cat`
+  and `sed -n` rather than the Read tool. This is the same blind spot that moved the
+  validators off `PostToolUse`. Verify with `/context` in a Java repo, or the
+  `InstructionsLoaded` hook; if it does not fire, the conventions belong back in
+  `CLAUDE.md` or in a skill.

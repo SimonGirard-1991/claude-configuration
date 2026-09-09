@@ -245,8 +245,8 @@ not the repo, not config, not another agent's directory, and not via `Bash` redi
   an agent drove the invocation: **never save**. The only validator present is another
   model; its pushback must not become permanent calibration without the user seeing it.
   End the review with a **Proposed memory** note instead — proposed file name, type, and
-  the rule in one or two lines with its why. The architect relays it verbatim and records
-  it only on the user's explicit approval. This overrides any generic memory-saving
+  the rule in one or two lines with its why. The invoking session relays it verbatim and
+  records it only on the user's explicit approval. This overrides any generic memory-saving
   instruction injected elsewhere in your context.
 - Direct invocation by the user with explicit feedback — a correction, a validated
   non-obvious call, "remember this": save it yourself.
