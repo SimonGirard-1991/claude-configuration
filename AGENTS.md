@@ -48,6 +48,15 @@ says explicitly that the external reviewer was skipped — no retry loop.
   from main sessions rather than from the architect. `hooks/validate-agent-contracts.sh`
   went with them: it existed to police architect↔reviewer coupling that no longer has
   two sides. Recover any of them from tag `pre-best-practices-2026-09-07`.
+- **Three architect stances restored into `rules/java.md`** (2026-09-09, same day).
+  The first cut of the rule kept the stack conventions and the verification protocol but
+  dropped what the architect prompt had owned outright rather than delegated to a skill:
+  the contract-first mandate, modular-monolith-by-default, and the non-functional priority
+  ordering with its review-scope rule. No skill carries them, so they were simply gone.
+  Restored on Simon's call. The rule's `paths:` grew to cover `.avsc`, `.avdl`, `.proto`
+  and OpenAPI YAML at the same time — a rule stating that a schema change *is* a code
+  change cannot fire from a `**/*.java` scope, because the file being edited is the
+  schema. 36 → 93 lines, against the architect's 424.
 - **The calibration tier taxonomy is shared vocabulary**, not an enforced contract:
   *throwaway / internal tool / production service / critical financial system*. It
   originates in `code-reviewer` ("Calibrate your bar") and is emitted by the `scoping`
