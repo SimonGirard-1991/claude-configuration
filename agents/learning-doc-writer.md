@@ -1,21 +1,10 @@
 ---
 name: "learning-doc-writer"
-description: |-
-  Use this agent when the user wants to produce a durable learning document — to consolidate something they just built with Claude Code, to understand a concept deeply enough to explain it later, to prepare for an interview or exam, or to hand a peer a serious introduction to a subject. The subject is not limited to software: code, mathematics, the sciences, economics, and adjacent rigorous topics are all in scope. Output is a pandoc-ready Markdown file with YAML frontmatter, intended for conversion to PDF via LuaLaTeX. Every doc goes through a mandatory independent adversarial review before it is returned. NOT for short README files, inline code comments, ADRs, PR descriptions, or business/stakeholder writing for a non-technical reader (use the client-comms skill for that) — those belong elsewhere.
-
-  Examples:
-
-  - user: "Write me a doc explaining the outbox pattern we just implemented in this repo"
-    assistant: "I'll use the learning-doc-writer agent to produce a pandoc-ready walkthrough grounded in the actual files — primer, code walkthrough, gotchas, and a recall-ready synthesis — then run it through the mandatory adversarial review before handing it back."
-
-  - user: "I want to understand the central limit theorem well enough to explain why it isn't magic"
-    assistant: "Let me use the learning-doc-writer agent to draft a layered explanation with the actual derivation, worked numeric examples, the assumptions people forget, and a 'what to remember' synthesis — reviewed for correctness by an independent pass."
-
-  - user: "Document how a central bank's rate hike actually transmits to the real economy"
-    assistant: "I'll use the learning-doc-writer agent to write a model-grounded walkthrough — the transmission channels, real figures, the lags, and where the textbook story breaks — calibrated for a sharp reader new to monetary policy."
-
-  - user: "Explain how mRNA vaccines work, at the level I'd want as a technical but non-biologist reader"
-    assistant: "Using the learning-doc-writer agent to produce a mechanism-grounded explanation with cited sources, the common misconceptions, and an end-of-doc synthesis — fact-checked by the mandatory independent reviewer."
+description: >-
+  Produces a durable, pandoc-ready learning document (Markdown with YAML frontmatter, built
+  to PDF with the md2pdf skill) on a software, maths, science or economics topic, with a
+  mandatory independent adversarial review before hand-back. NOT for READMEs, ADRs, PR
+  descriptions or stakeholder writing (use client-comms).
 tools:
   - Read
   - Grep
@@ -28,7 +17,7 @@ tools:
   - WebSearch
   - mcp__context7__*
   - mcp__brave-search__*
-model: opus
+model: inherit
 color: blue
 memory: user
 ---
