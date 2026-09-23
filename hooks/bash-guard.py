@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """PreToolUse guard for Bash tool calls.
 
-Emits a permissionDecision (ask/deny) for destructive commands and shell
-access to secret-bearing files. Silent exit 0 = no opinion, normal permission
+Emits a permissionDecision (ask/deny) for destructive commands, commands that
+print credentials, and shell access to secret-bearing files. Silent exit 0 = no opinion, normal permission
 flow applies. Never emits "allow" (that would bypass the permission system).
 Fails open: any parse error exits 0.
 
@@ -38,14 +38,42 @@ SECRET_FILE_RE = re.compile(
     r"(?:^|[\s/=('\"])\.env(?:rc)?(?:\.[\w.-]+)?(?=$|[\s;|&)'\"])"
     r"|id_rsa|id_ed25519|id_ecdsa"
     r"|\.credentials\.json"
-    r"|[\w.-]+\.pem\b"
+    r"|[\w.-]+\.(?:pem|p12|pfx)\b"
+    r"|\.ssh/|\.gnupg/|\.aws/credentials|\.netrc\b|\.git-credentials"
+    r"|\.npmrc\b|\.pypirc\b|\.docker/config\.json|\.kube/config"
+    r"|gh/hosts\.yml|\.config/gcloud|application_default_credentials\.json"
 )
 TEMPLATE_ENV_RE = re.compile(r"\.env\.(?:example|sample|template|dist|test)\b")
+
+# --- secrets: commands whose output is a credential -------------------------
+SECRET_PRINTERS = [
+    (r"\bsecurity\b[^;&|]*\b(?:find-(?:generic|internet)-password|dump-keychain|export)\b",
+     "Reads secrets from the macOS Keychain."),
+    (r"\bgh\s+auth\s+(?:token\b|status\b[^;&|]*(?:\s-t\b|--show-token))", "Prints the GitHub token."),
+    (r"\bgcloud\s+auth\s+(?:application-default\s+)?print-(?:access|identity)-token", "Prints a GCP token."),
+    (r"\baz\s+account\s+get-access-token", "Prints an Azure token."),
+    (r"\baws\s+(?:configure\s+(?:get|export-credentials)|sts\s+get-session-token|ecr\s+get-login-password)",
+     "Prints AWS credentials."),
+    (r"\bop\s+(?:read|item\s+get)\b", "Reads a 1Password secret."),
+    (r"\bpass\s+show\b", "Reads a pass secret."),
+    (r"\bvault\s+(?:read|kv\s+get)\b", "Reads a Vault secret."),
+    (r"\bkubectl\b[^;&|]*\bget\s+secrets?\b[^;&|]*(?:\s-o|--output)", "Prints Kubernetes secret values."),
+    (r"\bgit\s+credential\s+fill\b", "Prints stored git credentials."),
+    (r"\bheroku\s+auth:token\b", "Prints the Heroku token."),
+]
+for pattern, reason in SECRET_PRINTERS:
+    if re.search(pattern, cmd):
+        decide("deny", f"{reason} Secret values must never enter the transcript.")
+
+SECRET_VAR = r"[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|AUTH)[A-Za-z0-9_]*"
+if re.search(r"(?:^|[;&|(]\s*)(?:env|printenv|set|export\s+-p|declare\s+-x)\s*(?:$|[;&|)])", cmd):
+    decide("deny", "Dumps the environment, which holds API keys.")
+if re.search(rf"\bprintenv\s+{SECRET_VAR}\b", cmd) \
+        or re.search(rf"\b(?:echo|printf|print)\b[^;&|]*\$\{{?{SECRET_VAR}", cmd):
+    decide("deny", "Prints a secret-named environment variable.")
+
 if SECRET_FILE_RE.search(cmd) and not TEMPLATE_ENV_RE.search(cmd):
     decide("ask", "Command references a potential secrets file (.env/keys/credentials). Approve only if no secret value can end up in the transcript.")
-
-if re.search(r"\bsecurity\b.*find-(?:generic|internet)-password", cmd):
-    decide("ask", "Reads a secret from the macOS Keychain.")
 
 # --- git: history-rewriting / data-destroying ------------------------------
 if re.search(r"\bgit\b", cmd):
