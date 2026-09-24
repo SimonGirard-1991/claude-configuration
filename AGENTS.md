@@ -29,8 +29,9 @@ instructions and the `MEMORY.md` index itself. Only the setup-specific half live
 
 The reason is narrow and worth keeping: in a loop the only validator present is another
 model, and architect pushback must not be laundered into reviewer calibration without a
-human seeing it. Writes are confined to `agent-memory/code-reviewer/` — never the repo,
-never config, never through `Bash` redirects.
+human seeing it. Writes are confined to `agent-memory/code-reviewer/` and scratch — never
+the repo, never config, never through `Bash` redirects — and since 2026-09-24
+`hooks/reviewer-guard.py` enforces that rather than trusting the prompt with it.
 
 Edge cases: a ⚠️ verdict carrying only 🔵 issues may return to the user unchanged, since
 🔵 is judged on merit. A failed reviewer spawn falls back to a structured self-review and
@@ -38,6 +39,20 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **The reviewer's read-only contract is a hook, not a promise** (2026-09-24).
+  `memory: user` auto-enables Write and Edit, so "read-only on the repo" was held by the
+  prompt alone. `hooks/reviewer-guard.py` runs from the reviewer's own frontmatter, and
+  only while it does:
+  - Edit/Write land only in its memory directory or scratch.
+  - `git` is allowlisted rather than blocklisted, so an alias or a rare write verb is
+    denied by default.
+  - In-place edits, editors, `eval`, `sh -c`, write-capable `gh`, file-mutating commands,
+    and redirects or `tee` outside scratch are denied.
+
+  It fails closed. Test runners and builds still pass, because the prompt's
+  `git status` invariant covers their side effects. `SubagentStop` now skips
+  `code-reviewer`, `Explore` and `Plan`: a read-only agent cannot fix README drift, so
+  blocking it up to eight times achieved nothing.
 - **`bash-guard.py` judges each command segment, pinned by a fixture table**
   (2026-09-24). An audit ran 66 commands through the old guard and 25 got the wrong
   answer. A template name anywhere in a command (`.env.example`) exempted all of it, so

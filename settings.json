@@ -105,6 +105,7 @@
     ],
     "SubagentStop": [
       {
+        "matcher": "^(?!code-reviewer$|Explore$|Plan$).+",
         "hooks": [
           {
             "type": "command",
