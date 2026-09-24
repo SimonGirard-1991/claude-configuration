@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Fixture tests for the hook scripts in hooks/.
+"""Fixture tests for the hook scripts in hooks/, and for scripts/sonar-gate.sh, whose
+answer the Sonar Stop hook remembers.
 
 Each hook runs as a subprocess on a crafted payload, the way Claude Code calls it,
 and the suite asserts what it prints. The tables pin behaviour in both directions:
@@ -8,7 +9,8 @@ that fires on ordinary commands teaches the session to route around it.
 
 Hook paths come from environment overrides, so a candidate can be tested before it
 replaces the live file — a broken live guard gates the very session editing it:
-CLAUDE_BASH_GUARD, CLAUDE_REVIEWER_GUARD, CLAUDE_SESSION_RULES.
+CLAUDE_BASH_GUARD, CLAUDE_REVIEWER_GUARD, CLAUDE_SESSION_RULES, CLAUDE_LOG_INSTRUCTIONS,
+CLAUDE_SONAR_GATE_HOOK, CLAUDE_SONAR_GATE.
 
 Run: python3 scripts/test_hooks.py
 """
@@ -28,6 +30,9 @@ REVIEWER_GUARD = os.environ.get("CLAUDE_REVIEWER_GUARD", str(ROOT / "hooks" / "r
 SESSION_RULES = os.environ.get("CLAUDE_SESSION_RULES", str(ROOT / "hooks" / "session-rules.sh"))
 LOG_INSTRUCTIONS = os.environ.get("CLAUDE_LOG_INSTRUCTIONS",
                                   str(ROOT / "hooks" / "log-instructions.sh"))
+SONAR_HOOK = os.environ.get("CLAUDE_SONAR_GATE_HOOK",
+                            str(ROOT / "hooks" / "sonar-gate-on-stop.sh"))
+SONAR_GATE = os.environ.get("CLAUDE_SONAR_GATE", str(ROOT / "scripts" / "sonar-gate.sh"))
 HOOK_OUTPUT_CAP = 9800
 
 _passes = 0
@@ -393,10 +398,258 @@ def test_session_rules() -> None:
     shutil.rmtree(fx)
 
 
+# ── sonar-gate-on-stop.sh ───────────────────────────────────────────────────
+# A stub stands in for scripts/sonar-gate.sh: each call logs its --files list, writes
+# STUB_GATE_EDIT into the project mid-"scan" when set, and exits with STUB_GATE_EXIT.
+# TMPDIR is a fixture directory, because the round counter and the green fingerprint live
+# there. Git runs without the user's config, so a global hook or signing setting cannot
+# change what the fixture commits.
+STUB_GATE = """#!/bin/bash
+files=""
+dir=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --files) files=$(tr '\\n' ' ' <"$2"); shift 2 ;;
+    --project-dir) dir="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf '%s\\n' "$files" >>"$STUB_GATE_LOG"
+[ -z "${STUB_GATE_EDIT:-}" ] || printf 'class Late {}\\n' >"$dir/$STUB_GATE_EDIT"
+exit "${STUB_GATE_EXIT:-0}"
+"""
+
+
+def test_sonar_gate() -> None:
+    fx = Path(tempfile.mkdtemp()).resolve()
+    tmp, log, gate = fx / "tmp", fx / "calls.log", fx / "gate.sh"
+    tmp.mkdir()
+    gate.write_text(STUB_GATE)
+    gate.chmod(0o755)
+    env = {**os.environ, "TMPDIR": str(tmp), "CLAUDE_SONAR_GATE": str(gate),
+           "STUB_GATE_LOG": str(log), "GIT_CONFIG_GLOBAL": "/dev/null",
+           "GIT_CONFIG_NOSYSTEM": "1"}
+
+    def git(repo: Path, *args: str) -> None:
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=fixture",
+                        "-c", "user.email=fixture@example.invalid", *args],
+                       check=True, capture_output=True, env=env)
+
+    def put(path: Path, text: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def new_repo(name: str, branch: str, commit: bool = True) -> Path:
+        repo = fx / name
+        put(repo / "pom.xml", "<project/>\n")
+        put(repo / ".sonar-gate", "")
+        put(repo / "src/main/java/App.java", "class App {}\n")
+        git(fx, "init", "-q", "-b", branch, str(repo))
+        if commit:
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "init")
+        return repo
+
+    def stop(repo: Path, gate_exit: int = 0, hook: str = SONAR_HOOK,
+             **extra: str) -> subprocess.CompletedProcess:
+        return run_hook(hook, {"cwd": str(repo), "session_id": "fixture"},
+                        env={**env, "STUB_GATE_EXIT": str(gate_exit), **extra})
+
+    def calls() -> list[list[str]]:
+        return [line.split() for line in log.read_text().splitlines()] if log.exists() else []
+
+    def rescanned(name: str, before: int, want: int = 1) -> None:
+        check(f"sonar-gate: {name}", len(calls()) == before + want,
+              f"{len(calls()) - before} new calls, expected {want}")
+
+    app, new = "src/main/java/App.java", "src/main/java/New.java"
+    repo = new_repo("feature", "master")
+    git(repo, "checkout", "-q", "-b", "feature")
+    put(repo / app, "class App { int x; }\n")
+    git(repo, "commit", "-q", "-am", "feature work")
+    steps = [
+        ("committed work is diffed against master's fork point", None, 0, 0, 1),
+        ("a Stop with nothing changed skips the scan", None, 0, 0, 1),
+        ("a change outside java, poms and schemas skips the scan", ("README.md", "docs\n"),
+         0, 0, 1),
+        ("an edited java file re-scans", (app, "class App { int y; }\n"), 0, 0, 2),
+        ("an edited pom re-scans", ("pom.xml", "<project><!-- x --></project>\n"), 0, 0, 3),
+        ("a new untracked java file re-scans", (new, "class New {}\n"), 0, 0, 4),
+        ("an edited untracked java file re-scans", (new, "class New { int z; }\n"), 0, 0, 5),
+        ("findings block the Stop", (app, "class App { int bad; }\n"), 2, 2, 6),
+        ("a red result is not remembered", None, 2, 2, 7),
+        ("a green re-scan passes", None, 0, 0, 8),
+        ("and a green result is remembered", None, 0, 0, 8),
+    ]
+    for name, change, gate_exit, want_exit, want_calls in steps:
+        if change:
+            put(repo / change[0], change[1])
+        code = stop(repo, gate_exit).returncode
+        check(f"sonar-gate: {name}", code == want_exit and len(calls()) == want_calls,
+              f"exit {code}, {len(calls())} calls, expected exit {want_exit}, {want_calls} calls")
+    check("sonar-gate: --files lists the committed and the untracked java files",
+          calls()[3:4] == [[app, new]], repr(calls()[3:4]))
+    check("sonar-gate: the fingerprint lives in TMPDIR",
+          any(p.name.startswith("claude-sonar-fp-") for p in tmp.iterdir()))
+
+    # Derived from rules/java.md, so a contract glob added there fails here until the hook
+    # fingerprints it too. Java sources and poms are covered above; Gradle files are out of
+    # scope, because the gate is Maven-only.
+    front = (ROOT / "rules" / "java.md").read_text().split("---")[1]
+    globs = [line.strip()[2:].strip("'\"") for line in front.splitlines()
+             if line.strip().startswith("- ")]
+    schemas = [g for g in globs if not g.endswith((".java", "pom.xml", ".gradle", ".gradle.kts"))]
+    check("sonar-gate: rules/java.md yields contract globs to derive from", bool(schemas),
+          repr(globs))
+    for glob in schemas:
+        sample = glob.replace("**/", "src/", 1).replace("**", "x").replace("*", "x")
+        before = len(calls())
+        put(repo / sample, "x\n")
+        stop(repo)
+        rescanned(f"a new {glob} re-scans", before)
+
+    before = len(calls())
+    gate.write_text(STUB_GATE + "# revised\n")
+    stop(repo)
+    rescanned("a changed gate script re-scans", before)
+
+    variant = fx / "hook-variant.sh"
+    variant.write_text(Path(SONAR_HOOK).read_text() + "# revised\n")
+    variant.chmod(0o755)
+    before = len(calls())
+    stop(repo, hook=str(variant))
+    rescanned("a changed hook re-scans", before)
+
+    late = "src/main/java/Late.java"
+    put(repo / app, "class App { int mid; }\n")
+    stop(repo, STUB_GATE_EDIT=late)
+    before = len(calls())
+    stop(repo)
+    rescanned("a file written mid-scan is scanned by the next Stop", before)
+    check("sonar-gate: ...with that file in --files",
+          any(late in c for c in calls()[before:]), repr(calls()[before:]))
+
+    put(repo / app, "class App { int s; } // NOSONAR: fixture reason\n")
+    before = len(calls())
+    first, second = stop(repo), stop(repo)
+    rescanned("a justified suppression scans once", before)
+    check("sonar-gate: a skipped Stop still reports justified suppressions",
+          "report these" in first.stderr and "report these" in second.stderr,
+          repr(second.stderr[:160]))
+
+    silent = fx / "silent-diff.sh"
+    silent.write_text("#!/bin/bash\n")
+    silent.chmod(0o755)
+    put(repo / app, "class App { int n; } // NOSONAR\n")
+    code = stop(repo, GIT_CONFIG_COUNT="2", GIT_CONFIG_KEY_0="color.ui",
+                GIT_CONFIG_VALUE_0="always", GIT_CONFIG_KEY_1="diff.external",
+                GIT_CONFIG_VALUE_1=str(silent)).returncode
+    check("sonar-gate: user diff config cannot hide an unjustified suppression", code == 2,
+          f"exit {code}")
+
+    repo = new_repo("rebase", "main")
+    put(repo / "src/main/java/Other.java", "class Other {}\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "other")
+    git(repo, "checkout", "-q", "-b", "topic")
+    put(repo / app, "class App { int topic; }\n")
+    git(repo, "commit", "-q", "-am", "topic work")
+    stop(repo)
+    git(repo, "checkout", "-q", "main")
+    put(repo / "src/main/java/Other.java", "class Other { int moved; }\n")
+    git(repo, "commit", "-q", "-am", "main moved")
+    git(repo, "checkout", "-q", "topic")
+    git(repo, "rebase", "-q", "main")
+    before = len(calls())
+    stop(repo)
+    rescanned("a rebase onto a moved base re-scans, though the diff is identical", before)
+
+    repo = new_repo("unpushed", "main")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    put(repo / app, "class App { int unpushed; }\n")
+    git(repo, "commit", "-q", "-am", "unpushed")
+    before = len(calls())
+    code = stop(repo).returncode
+    check("sonar-gate: an unpushed commit on main is diffed against origin/HEAD",
+          code == 0 and len(calls()) == before + 1 and calls()[-1] == [app],
+          f"exit {code}, calls {calls()[before:]}")
+
+    (repo / ".sonar-gate").unlink()
+    put(repo / app, "class App { int inert; }\n")
+    before = len(calls())
+    code = stop(repo).returncode
+    check("sonar-gate: inert without .sonar-gate", code == 0 and len(calls()) == before,
+          f"exit {code}, {len(calls()) - before} new calls")
+
+    repo = new_repo("unborn", "main", commit=False)
+    before = len(calls())
+    codes = [stop(repo).returncode, stop(repo).returncode]
+    check("sonar-gate: with no commit to fingerprint, every Stop scans",
+          codes == [0, 0] and len(calls()) == before + 2,
+          f"exits {codes}, {len(calls()) - before} new calls")
+    shutil.rmtree(fx)
+
+
+# ── scripts/sonar-gate.sh, whose answer the Stop hook remembers ─────────────
+# Stubs on PATH stand in for curl and sleep, and a stub mvnw in the project for Maven, so
+# no SonarQube is needed. A green answer is cached, so the gate must never give one for an
+# analysis it did not wait for.
+STUB_MVNW = """#!/bin/bash
+root=$(cd "$(dirname "$0")" && pwd)
+case " $* " in
+  *" clean "*) rm -rf "$root/target" ;;
+  *sonar-maven-plugin*)
+    if [ -n "${STUB_CE:-}" ]; then
+      mkdir -p "$root/target/sonar"
+      printf 'ceTaskId=%s\\n' "$STUB_CE" >"$root/target/sonar/report-task.txt"
+    fi ;;
+esac
+exit 0
+"""
+STUB_CURL = """#!/bin/bash
+case "$*" in
+  */api/system/status*) echo '{"status":"UP"}' ;;
+  */api/ce/task*) printf '{"task":{"status":"%s"}}\\n' "$STUB_CE_STATUS" ;;
+  */api/issues/search*) echo '{"total":0,"issues":[]}' ;;
+  *) exit 7 ;;
+esac
+"""
+
+
+def test_sonar_gate_script() -> None:
+    fx = Path(tempfile.mkdtemp()).resolve()
+    stubs, project = fx / "bin", fx / "project"
+    stubs.mkdir()
+    project.mkdir()
+    (project / "pom.xml").write_text("<project/>\n")
+    for path, text in ((project / "mvnw", STUB_MVNW), (stubs / "curl", STUB_CURL),
+                       (stubs / "sleep", "#!/bin/bash\n")):
+        path.write_text(text)
+        path.chmod(0o755)
+    env = {**os.environ, "PATH": f"{stubs}:{os.environ['PATH']}",
+           "SONAR_TOKEN": "fixture", "SONAR_HOST_URL": "http://sonar.invalid"}
+    cases = [
+        ("reports clean once the analysis succeeded", "task-1", "SUCCESS", 0, "clean"),
+        ("fails without a task id to wait for", "", "SUCCESS", 1, "no ceTaskId"),
+        ("fails when the analysis never finishes", "task-1", "PENDING", 1, "still PENDING"),
+        ("fails when the server rejects the analysis", "task-1", "FAILED", 1, "FAILED"),
+    ]
+    for name, ce, status, want_exit, want_err in cases:
+        proc = subprocess.run([SONAR_GATE, "--project-dir", str(project), "--no-boot"],
+                              capture_output=True, text=True, timeout=60, check=False,
+                              env={**env, "STUB_CE": ce, "STUB_CE_STATUS": status})
+        check(f"sonar-gate.sh: {name}", proc.returncode == want_exit and want_err in proc.stderr,
+              f"exit {proc.returncode}, stderr {proc.stderr.strip()[-160:]!r}")
+    shutil.rmtree(fx)
+
+
 def run() -> None:
     test_bash_guard()
     test_reviewer_guard()
     test_session_rules()
+    test_sonar_gate()
+    test_sonar_gate_script()
 
 
 if __name__ == "__main__":

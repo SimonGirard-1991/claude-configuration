@@ -32,7 +32,7 @@
 #     SONAR_IMAGE                     default sonarqube:26.8.0.126808-community
 #
 # Exit status: 0 clean, 1 could not run, 2 findings or a failed quality gate. The
-# distinction matters — the SubagentStop hook blocks on 2 and reports "gate is OFF" on 1.
+# distinction matters — the Stop hook blocks on 2 and reports "Sonar checks are OFF" on 1.
 
 set -euo pipefail
 
@@ -144,7 +144,7 @@ ensure_sonar_up() {
   [ "$(sonar_status)" = "UP" ] && return 0
 
   # Booting is a foreground act with a ~20s cost and a container left running afterwards.
-  # Callers that are not a person at a terminal (the SubagentStop hook) pass --no-boot and
+  # Callers that are not a person at a terminal (the Stop hook) pass --no-boot and
   # get told to run this by hand once, rather than having infrastructure appear mid-turn.
   [ "$NO_BOOT" -eq 0 ] || die "SonarQube is down at $HOST_URL, run sonar-gate.sh once to start it"
 
@@ -210,17 +210,21 @@ if ! "$MVN" -B -f "$ROOT/pom.xml" "$SCANNER" \
   fi
 fi
 
+# The issues API answers from the last *completed* analysis, so reading it before this one has
+# finished reports the previous analysis's findings — and the Stop hook remembers a green
+# answer. Both ways of not waiting therefore fail instead of falling through.
 CE=$(grep '^ceTaskId=' "$ROOT/target/sonar/report-task.txt" 2>/dev/null | cut -d= -f2 || true)
-if [ -n "$CE" ]; then
-  for _ in $(seq 1 150); do
-    st=$(curl -s -u "$TOKEN:" "$HOST_URL/api/ce/task?id=$CE" | /usr/bin/jq -r '.task.status // empty')
-    case "$st" in
-      SUCCESS) break ;;
-      FAILED|CANCELED) die "server-side processing $st" ;;
-    esac
-    sleep 2
-  done
-fi
+[ -n "$CE" ] || die "no ceTaskId in $ROOT/target/sonar/report-task.txt; cannot wait for this analysis"
+st=""
+for _ in $(seq 1 150); do
+  st=$(curl -s -u "$TOKEN:" "$HOST_URL/api/ce/task?id=$CE" | /usr/bin/jq -r '.task.status // empty')
+  case "$st" in
+    SUCCESS) break ;;
+    FAILED | CANCELED) die "server-side processing $st" ;;
+  esac
+  sleep 2
+done
+[ "$st" = "SUCCESS" ] || die "analysis $CE still ${st:-unknown} after 300s"
 
 api_issues() {
   curl -s -u "$TOKEN:" -G "$HOST_URL/api/issues/search" \

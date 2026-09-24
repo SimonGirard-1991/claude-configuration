@@ -36,6 +36,17 @@
 # inside somebody's build. Infrastructure failures never block, but they are never silent
 # either — same rule as validate-readme.sh.
 #
+# A green run is remembered: a Stop whose fingerprinted inputs match the last green run skips the
+# scan instead of paying for another Maven build. The fingerprint covers the base commit, and the
+# diff against it plus the untracked files for java sources, poms and the contract schemas that
+# rules/java.md treats as code; then `.sonar-gate`, the gate script and this hook. Only a green
+# run records it, and it is taken before the change set is read: anything that lands later,
+# mid-scan included, changes the next fingerprint instead of being recorded as clean without
+# having been analyzed. Everything else the build reads is outside it — resources,
+# `lombok.config`, `.mvn/`, dependencies, the server's quality profile — so a turn that changed
+# only those is not re-scanned until a fingerprinted input changes; remove
+# $TMPDIR/claude-sonar-fp-* to force one.
+#
 # CLAUDE_CONFIG_DIR / CLAUDE_SONAR_GATE overrides exist for testing.
 
 ROOT="${CLAUDE_CONFIG_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -55,12 +66,35 @@ repo=$(cd "$cwd" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)
 
 # Committed work on a feature branch counts too, so compare against the fork point when there
 # is one rather than only the working tree.
-base=$(git -C "$repo" merge-base HEAD main 2>/dev/null) || base=""
+base=""
+for ref in refs/remotes/origin/HEAD refs/heads/main refs/heads/master; do
+  base=$(git -C "$repo" merge-base HEAD "$ref" 2>/dev/null) && break
+done
 [ -n "$base" ] || base="HEAD"
+
+fp_paths=('*.java' '*pom.xml' '*.proto' '*.avsc' '*.avdl'
+  '*openapi*.yaml' '*openapi*.yml' 'openapi/*' '*/openapi/*'
+  '*-api.yaml' '*-api.yml')
+
+fingerprint() (
+  set -o pipefail
+  {
+    git -C "$repo" rev-parse --verify --quiet "$base^{commit}" &&
+      git -C "$repo" diff --no-ext-diff --no-textconv --no-color "$base" -- "${fp_paths[@]}" &&
+      git -C "$repo" ls-files --others --exclude-standard -z -- "${fp_paths[@]}" |
+      while IFS= read -r -d '' f; do
+        printf '%s ' "$f"
+        git -C "$repo" hash-object -- "$f" || exit 1
+      done &&
+      cat "$repo/.sonar-gate" "$GATE" "${BASH_SOURCE[0]}"
+  } | shasum -a 256 | cut -d' ' -f1
+)
+fp=$(fingerprint) || fp=""
 
 untracked=$(git -C "$repo" ls-files --others --exclude-standard -- '*.java' 2>/dev/null)
 changed=$(
-  { git -C "$repo" diff --name-only "$base" -- '*.java' 2>/dev/null
+  {
+    git -C "$repo" diff --name-only "$base" -- '*.java' 2>/dev/null
     printf '%s\n' "$untracked"
   } | grep -v '^$' | sort -u
 )
@@ -71,11 +105,12 @@ if [ ! -x "$GATE" ]; then
   exit 1
 fi
 
-added=$(git -C "$repo" diff --unified=0 "$base" -- '*.java' 2>/dev/null | grep '^+' | grep -v '^+++')
+added=$(git -C "$repo" diff --no-ext-diff --no-textconv --no-color --unified=0 "$base" -- '*.java' 2>/dev/null |
+  grep '^+' | grep -v '^+++')
 while IFS= read -r f; do
   [ -n "$f" ] && [ -f "$repo/$f" ] || continue
   added="${added}"$'\n'"$(sed 's/^/+/' "$repo/$f")"
-done <<< "$untracked"
+done <<<"$untracked"
 
 bad=""
 good=""
@@ -99,7 +134,7 @@ while IFS= read -r line; do
       fi
       ;;
   esac
-done <<< "$added"
+done <<<"$added"
 
 if [ -n "$bad" ]; then
   printf 'SONAR GATE: unjustified suppression(s) added:\n%s' "$bad" >&2
@@ -111,11 +146,25 @@ if [ -n "$bad" ]; then
 fi
 
 counter="${TMPDIR:-/tmp}/claude-sonar-gate-${agent}"
+fp_file="${TMPDIR:-/tmp}/claude-sonar-fp-$(printf '%s' "$repo" | shasum -a 256 | cut -c1-16)"
+
+clean() {
+  rm -f "$counter"
+  [ -n "$good" ] && printf 'SONAR GATE: clean. New justified suppression(s), report these:\n%s' "$good" >&2
+  exit 0
+}
+
+if [ -n "$fp" ] && [ "$fp" = "$(cat "$fp_file" 2>/dev/null)" ]; then
+  clean
+fi
+
 rounds=$(cat "$counter" 2>/dev/null || echo 0)
 
-out=$(mktemp); err=$(mktemp); pat=$(mktemp)
+out=$(mktemp)
+err=$(mktemp)
+pat=$(mktemp)
 trap 'rm -f "$out" "$err" "$pat"' EXIT
-printf '%s\n' "$changed" > "$pat"
+printf '%s\n' "$changed" >"$pat"
 
 "$GATE" --project-dir "$repo" --no-boot --files "$pat" >"$out" 2>"$err"
 status=$?
@@ -132,13 +181,12 @@ mine=$(grep -E '^[[:space:]]+[^[:space:]]+:[0-9]+ \[' "$out" || true)
 count=$(printf '%s' "$mine" | grep -c . || true)
 
 if [ "$status" -eq 0 ]; then
-  rm -f "$counter"
-  [ -n "$good" ] && printf 'SONAR GATE: clean. New justified suppression(s), report these:\n%s' "$good" >&2
-  exit 0
+  [ -n "$fp" ] && printf '%s\n' "$fp" >"$fp_file"
+  clean
 fi
 
 rounds=$((rounds + 1))
-printf '%s' "$rounds" > "$counter"
+printf '%s' "$rounds" >"$counter"
 
 if [ "$rounds" -ge "$MAX_ROUNDS" ]; then
   rm -f "$counter"

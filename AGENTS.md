@@ -39,6 +39,27 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **The Sonar gate skips a re-run when no fingerprinted input changed** (2026-09-24).
+  In an opted-in repo, every Stop re-ran the Maven build and analysis while the branch
+  differed from its base in any java file, so a turn that touched only docs paid for a
+  full scan. A green run now leaves a fingerprint — the base commit, then the diff and
+  untracked files for java sources, poms and the contract schemas `rules/java.md` treats
+  as code, then `.sonar-gate`, the gate and the hook — and a Stop that matches it skips
+  the scan. The test suite derives the schema list from `rules/java.md`, so a drift
+  between the two fails the suite. Resources and `.mvn/` stay out on purpose, because counting them
+  would make every config-only turn a Maven build again. Resolved dependencies and the
+  server's profile are not in the working tree at all; dependency declarations are, in
+  the poms, and those count. Only green runs record the fingerprint, and it is taken
+  before the change set is read, so nothing landing later can be recorded as clean.
+  The cache would have made one gate flaw permanent, so the gate was fixed first. With
+  no task id in the scanner's report, or a server task still unfinished after 300s, it
+  read the issues API anyway, which answers from the previous analysis. A stale green
+  used to last one Stop; cached, it would have lasted until the next fingerprinted
+  change. Both cases now exit 1, which the hook reports as "checks are OFF" and never
+  records. The base was a hardcoded `main`, so a `master` repo compared against HEAD and
+  never gated committed branch work; it now comes from `origin/HEAD`, then `main`, then
+  `master`. No repo carried `.sonar-gate` on that date, so the change waits for the
+  first one that opts in.
 - **MCP keys leave the session environment; `npx` servers are pinned at the top level**
   (2026-09-24). The shell rc exported the Brave key, and an old launcher script exported
   it again, so every Claude session and each of its Bash subprocesses carried it;
