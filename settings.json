@@ -124,7 +124,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/simongirard/.claude/hooks/bash-guard.py",
+            "command": "~/.claude/hooks/bash-guard.py",
             "timeout": 10
           }
         ]
@@ -136,7 +136,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/simongirard/.claude/hooks/on-stop-validate.sh",
+            "command": "~/.claude/hooks/on-stop-validate.sh",
             "timeout": 60
           }
         ]
@@ -147,17 +147,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/simongirard/.claude/hooks/on-stop-validate.sh",
+            "command": "~/.claude/hooks/on-stop-validate.sh",
             "timeout": 60
           },
           {
             "type": "command",
-            "command": "/Users/simongirard/.claude/hooks/format-on-stop.sh",
+            "command": "~/.claude/hooks/format-on-stop.sh",
             "timeout": 60
           },
           {
             "type": "command",
-            "command": "/Users/simongirard/.claude/hooks/sonar-gate-on-stop.sh",
+            "command": "~/.claude/hooks/sonar-gate-on-stop.sh",
             "timeout": 400
           }
         ]
