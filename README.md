@@ -15,12 +15,12 @@ Personal Claude Code configuration. This directory is a git repo; `.gitignore` k
 | `settings.json` | User-scope settings: permission allow/ask/deny lists (deny covers `.env*`/`.envrc`/`.credentials.json` reads+edits; ask covers `.pem`/ssh-key reads), hook wiring, model/effort defaults, env, plugin enablement. Contains no secrets — safe to track. Note: pre-approved session dirs (e.g. the scratchpad) can bypass deny rules — they protect real project/workspace paths. |
 | `CLAUDE.md` | Cross-project notes loaded into **every** session — kept deliberately short, because every line costs tokens in every session on this machine. Anything project-specific still belongs in that project's own `CLAUDE.md`. |
 | `AGENTS.md` | Maintainer notes: the two agents, the reviewer memory protocol, and the dated decision log. Claude Code reads `CLAUDE.md`, not this — nothing here loads into a session. |
-| `.gitignore` | Keeps secrets and derived state out of the repo. Add a tracked top-level entry and it needs a row in this table — `validate-readme.sh` enforces the pair. |
+| `.gitignore` | An allowlist: `/*` ignores every top-level entry and `!/` lines re-admit the tracked ones, so state Claude Code adds beside the config stays out by default. Secret-file patterns (`.env*`, `*.token`, `.credentials.json`) still apply inside tracked directories. Add a tracked top-level entry and it needs both a `!/` line and a row in this table — `validate-readme.sh` enforces the row. |
 | `README.md` | This file. |
 
 ## What's NOT tracked (gitignored)
 
-`agent-memory/` (persistent per-agent memory — `MEMORY.md` index + entries; personal calibration data, stays local), `plans/` (saved implementation plans — local working state; delete them when done, old plans rot), `settings.local.json`, `projects/`, `sessions/`, `history.jsonl`, `backups/`, `todos/`, `tasks/`, `cache/`, `debug/`, `file-history/`, `paste-cache/`, `shell-snapshots/`, `telemetry/`, `plugins/` (all of it — `installed_plugins.json` is derived state whose recorded SHAs churn on every commit; plugin *enablement* is tracked via `settings.json`), credentials, `.env*`.
+Everything the table above does not name. The ones worth knowing: `agent-memory/` (persistent per-agent memory — `MEMORY.md` index + entries; personal calibration data, stays local), `plans/` (saved implementation plans — local working state; delete them when done, old plans rot), `settings.local.json`, `projects/` (transcripts and per-project auto-memory), `plugins/` (all of it — `installed_plugins.json` is derived state whose recorded SHAs churn on every commit; plugin *enablement* is tracked via `settings.json`), `skills/synced/` (skills synced from claude.ai — Anthropic-licensed, never republish), `uploads/` (images pasted into sessions), `logs/`, credentials, `.env*`. The remote is public: treat anything that is not in the table as private.
 
 ## MCP servers — where they actually live
 
