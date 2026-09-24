@@ -39,6 +39,29 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **Rules load by repo type at SessionStart** (2026-09-24). The open question — does a
+  path-scoped rule fire when a file is read through Bash? — was answered from the
+  transcripts, and the answer was no:
+  - Only the Read tool triggers a load. Two sessions made eight Edit/Write calls each on
+    `.java` files and never got the rule.
+  - Auto mode reads through `cat` and `sed`. After the architect's retirement,
+    `rules/java.md` reached 3 of 7 Java-editing main sessions. The self-review loop it
+    prescribes ran in 2 of those 3 and in 0 of the other 4 (5 of 9 before the retirement).
+  - Of the loads that did happen, 37 of 40 landed in subagents, whose context never
+    reaches the main session.
+
+  `hooks/session-rules.sh` now injects `java.md` or `frontend.md` when the repo is Java
+  or React/Next, which is deterministic and costs nothing elsewhere. The `paths:`
+  frontmatter stays as a fallback.
+
+  Rejected alternatives:
+  - The rules back in CLAUDE.md: every session pays for them.
+  - A skill: model-invoked, the same non-determinism.
+
+  `shell.md` lost its `paths:` and loads everywhere (~700 tokens), because scripts appear
+  in any repo. A "read this first" pointer would have been as unreliable as a skill.
+  `hooks/log-instructions.sh` logs every load, so step 9 of the fix plan measures the
+  change instead of assuming it.
 - **The reviewer's read-only contract is a hook, not a promise** (2026-09-24).
   `memory: user` auto-enables Write and Edit, so "read-only on the repo" was held by the
   prompt alone. `hooks/reviewer-guard.py` runs from the reviewer's own frontmatter, and
@@ -121,10 +144,5 @@ says explicitly that the external reviewer was skipped — no retry loop.
 - **Test-running discipline**: the reviewer can run tests, but the invoking session is
   responsible for green tests before invocation. Whether the reviewer re-runs them is
   non-deterministic. Acceptable; revisit if review latency becomes a concern.
-- **Do path-scoped rules fire when a file is read through Bash?** `rules/java.md` earns
-  its place only if it loads. The docs say path-scoped rules trigger when Claude *reads*
-  a matching file, and under `defaultMode: auto` the harness steers reads toward `cat`
-  and `sed -n` rather than the Read tool. This is the same blind spot that moved the
-  validators off `PostToolUse`. Verify with `/context` in a Java repo, or the
-  `InstructionsLoaded` hook; if it does not fire, the conventions belong back in
-  `CLAUDE.md` or in a skill.
+- *Answered 2026-09-24 — see the decision log:* path-scoped rules do not fire on a
+  Bash read, nor on Edit/Write; only the Read tool triggers them.

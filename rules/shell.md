@@ -1,12 +1,3 @@
----
-paths:
-  - "**/*.sh"
-  - "**/*.bash"
-  - "**/*.zsh"
-  - "**/.zshrc"
-  - "**/.zshenv"
-  - "**/.zprofile"
----
 # Shell conventions
 
 A script kept and re-run has two users: the author six months out, and possibly the

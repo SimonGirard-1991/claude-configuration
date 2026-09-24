@@ -25,6 +25,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BASH_GUARD = os.environ.get("CLAUDE_BASH_GUARD", str(ROOT / "hooks" / "bash-guard.py"))
 REVIEWER_GUARD = os.environ.get("CLAUDE_REVIEWER_GUARD", str(ROOT / "hooks" / "reviewer-guard.py"))
+SESSION_RULES = os.environ.get("CLAUDE_SESSION_RULES", str(ROOT / "hooks" / "session-rules.sh"))
+LOG_INSTRUCTIONS = os.environ.get("CLAUDE_LOG_INSTRUCTIONS",
+                                  str(ROOT / "hooks" / "log-instructions.sh"))
+HOOK_OUTPUT_CAP = 9800
 
 _passes = 0
 _failures: list[str] = []
@@ -38,10 +42,11 @@ def check(name: str, ok: bool, detail: str = "") -> None:
         _failures.append(f"{name}: {detail}" if detail else name)
 
 
-def run_hook(hook: str, payload, env: dict | None = None,
+def run_hook(hook, payload, env: dict | None = None,
              cwd: Path | None = None) -> subprocess.CompletedProcess:
+    argv = [hook] if isinstance(hook, str) else list(hook)
     data = payload if isinstance(payload, str) else json.dumps(payload)
-    return subprocess.run([hook], input=data, capture_output=True, text=True,
+    return subprocess.run(argv, input=data, capture_output=True, text=True,
                           timeout=30, env=env, cwd=cwd, check=False)
 
 
@@ -256,9 +261,142 @@ def test_reviewer_guard() -> None:
     shutil.rmtree(tmp)
 
 
+# ── session-rules.sh and log-instructions.sh ────────────────────────────────
+# The fixture root is resolved first: macOS temp dirs live under /var, a symlink to
+# /private/var, and the hook compares physical paths. HOME, the config dir and the log
+# all point inside it, so the real ~/.claude/logs is never written.
+def strip_frontmatter(text: str) -> str:
+    lines = text.splitlines()
+    if lines and lines[0] == "---":
+        end = lines.index("---", 1)
+        lines = lines[end + 1:]
+    return "\n".join(lines)
+
+
+def test_session_rules() -> None:
+    fx = Path(tempfile.mkdtemp()).resolve()
+    config, home, log = fx / "config", fx / "home", fx / "log" / "rules.jsonl"
+    (config / "rules").mkdir(parents=True)
+    for rule in ("java.md", "frontend.md", "shell.md"):
+        shutil.copy(ROOT / "rules" / rule, config / "rules" / rule)
+    env = {**os.environ, "CLAUDE_CONFIG_DIR": str(config), "HOME": str(home),
+           "CLAUDE_RULES_LOG": str(log)}
+
+    def put(rel: str, text: str = "") -> None:
+        path = home / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def pkg(deps: dict | None = None, dev: dict | None = None) -> str:
+        return json.dumps({"dependencies": deps or {}, "devDependencies": dev or {}})
+
+    put("javarepo/pom.xml")
+    put("javarepo/src/main/java/App.java")
+    subprocess.run(["git", "init", "-q", str(home / "javarepo")], check=True)
+    put("gradle/settings.gradle.kts")
+    put("parent/a/b/pom.xml")
+    put("web/package.json", pkg({"react": "19", "next": "15"}))
+    put("mono/package.json", pkg(dev={"turbo": "2"}))
+    put("mono/apps/web/package.json", pkg({"react": "19"}))
+    put("angular/package.json", pkg({"@angular/core": "18"}, {"react": "18"}))
+    put("mobile/package.json", pkg({"react": "19", "react-native": "0.76"}))
+    put("nm/package.json", pkg(dev={"eslint": "9"}))
+    put("nm/node_modules/x/package.json", pkg({"react": "19"}))
+
+    def session(rule: str, cwd: Path, run_env: dict = env):
+        proc = run_hook([SESSION_RULES, rule],
+                        {"cwd": str(cwd), "source": "startup", "session_id": "fixture"},
+                        env=run_env)
+        out = proc.stdout.strip()
+        return proc.returncode, (json.loads(out) if out else None)
+
+    cases = [
+        ("java", home / "javarepo", True),
+        ("java", home / "javarepo" / "src" / "main" / "java", True),
+        ("java", home / "gradle", True),
+        ("java", home / "parent", True),
+        ("java", home / "web", False),
+        ("java", home, False),
+        ("java", Path("/"), False),
+        ("frontend", home / "web", True),
+        ("frontend", home / "mono", True),
+        ("frontend", home / "mono" / "apps" / "web", True),
+        ("frontend", home / "angular", False),
+        ("frontend", home / "mobile", False),
+        ("frontend", home / "nm", False),
+        ("frontend", home / "javarepo", False),
+    ]
+    injected = 0
+    for rule, cwd, expect in cases:
+        code, out = session(rule, cwd)
+        ctx = ((out or {}).get("hookSpecificOutput") or {}).get("additionalContext", "")
+        name = f"session-rules {rule} in {cwd.relative_to(fx) if fx in cwd.parents else cwd}"
+        check(name, code == 0 and bool(ctx) == expect,
+              f"exit {code}, expected {'inject' if expect else 'nothing'}, got {out!r:.120}")
+        if expect and ctx:
+            injected += 1
+            head, _, body = ctx.partition("\n\n")
+            check(f"{name}: marker header", head.startswith(f"[session-rules {rule} "), head[:80])
+            check(f"{name}: frontmatter stripped", body.startswith("# ") and "\npaths:" not in ctx[:600],
+                  body[:80])
+            check(f"{name}: under the output cap", len(ctx) <= HOOK_OUTPUT_CAP, str(len(ctx)))
+            check(f"{name}: no systemMessage on success", "systemMessage" not in out, str(out.keys()))
+
+    lines = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+    check("session-rules: one log line per injection", len(lines) == injected,
+          f"{len(lines)} lines for {injected} injections")
+    check("session-rules: log lines carry the session and marker",
+          all(e.get("session_id") == "fixture" and len(e.get("marker", "")) == 8 for e in lines))
+
+    empty = fx / "empty-config"
+    empty.mkdir()
+    code, out = session("java", home / "javarepo", {**env, "CLAUDE_CONFIG_DIR": str(empty)})
+    check("session-rules: an unreadable rule is reported, not skipped silently",
+          code == 0 and out is not None and "systemMessage" in out
+          and "hookSpecificOutput" not in out, repr(out))
+
+    big = fx / "big-config"
+    (big / "rules").mkdir(parents=True)
+    (big / "rules" / "java.md").write_text("# Java\n\n" + "x" * 12000 + "\n")
+    code, out = session("java", home / "javarepo", {**env, "CLAUDE_CONFIG_DIR": str(big)})
+    ctx = ((out or {}).get("hookSpecificOutput") or {}).get("additionalContext", "")
+    check("session-rules: an oversized rule degrades to a pointer, loudly",
+          code == 0 and 0 < len(ctx) < 500 and "systemMessage" in (out or {}), repr(out)[:160])
+
+    code, out = session("java", home / "javarepo",
+                        {**env, "CLAUDE_RULES_LOG": "/nonexistent-root-dir/rules.jsonl"})
+    ctx = ((out or {}).get("hookSpecificOutput") or {}).get("additionalContext", "")
+    check("session-rules: an unwritable log still injects, and says so",
+          code == 0 and bool(ctx) and "cannot write" in (out or {}).get("systemMessage", ""),
+          repr(out)[:160])
+
+    proc = run_hook([SESSION_RULES, "python"], {"cwd": str(home / "web")}, env=env)
+    check("session-rules: an unknown rule name exits 1", proc.returncode == 1, str(proc.returncode))
+
+    for rule in ("java", "frontend"):
+        body = strip_frontmatter((ROOT / "rules" / f"{rule}.md").read_text())
+        check(f"session-rules: live rules/{rule}.md fits under the cap with its header",
+              len(body) + 200 <= HOOK_OUTPUT_CAP, f"{len(body)} chars of body")
+
+    before = len(log.read_text().splitlines()) if log.exists() else 0
+    proc = run_hook(LOG_INSTRUCTIONS, {"session_id": "fixture", "cwd": "/x",
+                                       "file_path": "/x/CLAUDE.md", "memory_type": "User",
+                                       "load_reason": "session_start"}, env=env)
+    after = log.read_text().splitlines()
+    last = json.loads(after[-1]) if len(after) > before else {}
+    check("log-instructions: appends the load with its reason",
+          proc.returncode == 0 and last.get("load_reason") == "session_start"
+          and last.get("via") == "instructions_loaded", repr(last))
+    run_hook(LOG_INSTRUCTIONS, "not json", env=env)
+    check("log-instructions: an unreadable payload appends nothing",
+          len(log.read_text().splitlines()) == len(after))
+    shutil.rmtree(fx)
+
+
 def run() -> None:
     test_bash_guard()
     test_reviewer_guard()
+    test_session_rules()
 
 
 if __name__ == "__main__":

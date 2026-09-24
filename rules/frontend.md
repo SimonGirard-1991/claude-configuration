@@ -21,7 +21,8 @@ bar on the code — and state the why behind non-obvious choices rather than ass
 pushback will catch a bad suggestion.
 
 `.ts`/`.js` are in scope above because this machine's TypeScript is frontend; Java is the
-backend. Ignore this file if a match turns out to be Node service code.
+backend. Ignore this file for Node service code and for non-React frontends (Angular,
+React Native).
 
 ## Non-functional priorities
 
