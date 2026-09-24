@@ -38,6 +38,17 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **`bash-guard.py` judges each command segment, pinned by a fixture table**
+  (2026-09-24). An audit ran 66 commands through the old guard and 25 got the wrong
+  answer. A template name anywhere in a command (`.env.example`) exempted all of it, so
+  `diff .env.example .env` read the real file unasked; `+ref` and `:ref` pushes and
+  `rm -r .` passed; and joined lines produced false denials (`rm -rf build`, then
+  `cd ..` on the next line). Now lines and `; && || |` split segments, templates are
+  exempt per match, deny beats ask, and `scripts/test_hooks.py` pins both directions.
+  The shebang is `/usr/bin/python3`: `env python3` resolved to a pyenv shim that fails
+  in any repo pinning an uninstalled interpreter, so the guard was silently off there.
+  Out of reach by design: a secret read that names no file (`grep -r KEY .`) — the
+  sandbox trial owns that.
 - **The architect layer is retired** (2026-09-09). `java-backend-architect` became
   `rules/java.md`, a path-scoped rule that loads only when a Java file is read;
   `script-engineer` became `rules/shell.md`; `discovery-analyst` became the manually
