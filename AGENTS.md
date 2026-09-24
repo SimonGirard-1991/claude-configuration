@@ -1,7 +1,9 @@
 # Agents — maintainer notes
 
-Claude Code reads `CLAUDE.md`, not `AGENTS.md`. Nothing here loads into a session; this
-file exists so a future maintainer can see why the setup is shaped the way it is.
+This file exists so a future maintainer can see why the setup is shaped the way it is.
+Claude Code loads it as project instructions in sessions started in `~/.claude` (about
+4.7k tokens), and nowhere else. That is kept on purpose: it is the context a session
+working on this config needs.
 
 ## Agents in this setup
 
@@ -39,6 +41,12 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **This file loads in `~/.claude` sessions, and stays** (2026-09-24). `/context` showed
+  it injected as project memory at session start, which contradicted this file's first
+  paragraph and README's row, both of which said nothing here loads. Renaming it out of
+  the loader's reach was rejected: the cost falls only on sessions that edit this config,
+  and those are the sessions that need the decision log. The two sentences were fixed
+  instead.
 - **The Sonar gate skips a re-run when no fingerprinted input changed** (2026-09-24).
   In an opted-in repo, every Stop re-ran the Maven build and analysis while the branch
   differed from its base in any java file, so a turn that touched only docs paid for a
