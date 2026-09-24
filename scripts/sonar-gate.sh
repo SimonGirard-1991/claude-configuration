@@ -68,15 +68,43 @@ log() { printf 'sonar-gate: %s\n' "$1" >&2; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    -h|--help)      usage; exit 0 ;;
-    --project-dir)  PROJECT_DIR="${2:-}"; shift 2 ;;
-    --with-coverage) WITH_COVERAGE=1; shift ;;
-    --facets)       SHOW_FACETS=1; shift ;;
-    --max-findings) MAX_FINDINGS="${2:-30}"; shift 2 ;;
-    --files)        FILES_LIST="${2:-}"; shift 2 ;;
-    --no-boot)      NO_BOOT=1; shift ;;
-    --dry-run)      DRY_RUN=1; shift ;;
-    *)              printf 'sonar-gate: unknown argument: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --project-dir)
+      PROJECT_DIR="${2:-}"
+      shift 2
+      ;;
+    --with-coverage)
+      WITH_COVERAGE=1
+      shift
+      ;;
+    --facets)
+      SHOW_FACETS=1
+      shift
+      ;;
+    --max-findings)
+      MAX_FINDINGS="${2:-30}"
+      shift 2
+      ;;
+    --files)
+      FILES_LIST="${2:-}"
+      shift 2
+      ;;
+    --no-boot)
+      NO_BOOT=1
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    *)
+      printf 'sonar-gate: unknown argument: %s\n\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
   esac
 done
 
@@ -85,7 +113,7 @@ command -v /usr/bin/jq >/dev/null 2>&1 || die "jq not found at /usr/bin/jq"
 FILES_JSON="null"
 if [ -n "$FILES_LIST" ]; then
   [ -r "$FILES_LIST" ] || die "--files: cannot read $FILES_LIST"
-  FILES_JSON=$(/usr/bin/jq -R -s -c 'split("\n") | map(select(length > 0))' < "$FILES_LIST")
+  FILES_JSON=$(/usr/bin/jq -R -s -c 'split("\n") | map(select(length > 0))' <"$FILES_LIST")
 fi
 
 # One select, used for both the count and the listing, so the number reported and the lines
@@ -137,8 +165,8 @@ EOF
 fi
 
 sonar_status() {
-  curl -s --max-time 5 "$HOST_URL/api/system/status" 2>/dev/null \
-    | /usr/bin/jq -r '.status // empty' 2>/dev/null
+  curl -s --max-time 5 "$HOST_URL/api/system/status" 2>/dev/null |
+    /usr/bin/jq -r '.status // empty' 2>/dev/null
 }
 
 ensure_sonar_up() {
@@ -166,14 +194,20 @@ ensure_sonar_up() {
   log "waiting for SonarQube to come up"
   local i
   for i in $(seq 1 120); do
-    [ "$(sonar_status)" = "UP" ] && { log "up after ~${i}s"; return 0; }
+    [ "$(sonar_status)" = "UP" ] && {
+      log "up after ~${i}s"
+      return 0
+    }
     sleep 1
   done
   die "SonarQube did not come up within 120s"
 }
 
 resolve_token() {
-  if [ -n "${SONAR_TOKEN:-}" ]; then printf '%s' "$SONAR_TOKEN"; return 0; fi
+  if [ -n "${SONAR_TOKEN:-}" ]; then
+    printf '%s' "$SONAR_TOKEN"
+    return 0
+  fi
   security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>/dev/null && return 0
   die "no analysis token. Set SONAR_TOKEN, or store one:
     security add-generic-password -s $KEYCHAIN_SERVICE -a \"\$USER\" -w
@@ -197,12 +231,12 @@ fi
 # sonar.organization is blanked because the project pom may set it for SonarCloud, where it is
 # required and here it is rejected.
 if ! "$MVN" -B -f "$ROOT/pom.xml" "$SCANNER" \
-      -Dsonar.token="$TOKEN" \
-      -Dsonar.host.url="$HOST_URL" \
-      -Dsonar.projectKey="$PROJECT_KEY" \
-      -Dsonar.projectName="$(basename "$ROOT")" \
-      -Dsonar.organization= \
-      ${GATE_ARGS[@]+"${GATE_ARGS[@]}"} >"$build_log" 2>&1; then
+  -Dsonar.token="$TOKEN" \
+  -Dsonar.host.url="$HOST_URL" \
+  -Dsonar.projectKey="$PROJECT_KEY" \
+  -Dsonar.projectName="$(basename "$ROOT")" \
+  -Dsonar.organization= \
+  ${GATE_ARGS[@]+"${GATE_ARGS[@]}"} >"$build_log" 2>&1; then
   if grep -q 'QUALITY GATE STATUS: FAILED' "$build_log"; then
     log "quality gate FAILED"
   else
@@ -272,8 +306,8 @@ fi
 
 if [ "$SHOW_FACETS" -eq 1 ]; then
   api_issues --data-urlencode "facets=rules,impactSeverities,impactSoftwareQualities" \
-             --data-urlencode "ps=1" \
-    | /usr/bin/jq -r '.facets[]? | "-- \(.property) --",
+    --data-urlencode "ps=1" |
+    /usr/bin/jq -r '.facets[]? | "-- \(.property) --",
                       (.values[]? | select(.count > 0) | "  \(.count)\t\(.val)")'
 fi
 
@@ -283,7 +317,7 @@ fi
 GATE_FAILED=0
 if [ "$WITH_COVERAGE" -eq 1 ]; then
   gate=$(curl -s -u "$TOKEN:" -G "$HOST_URL/api/qualitygates/project_status" \
-           --data-urlencode "projectKey=$PROJECT_KEY")
+    --data-urlencode "projectKey=$PROJECT_KEY")
   if [ "$(printf '%s' "$gate" | /usr/bin/jq -r '.projectStatus.status // empty')" = "ERROR" ]; then
     GATE_FAILED=1
     echo "QUALITY GATE: FAILED"
