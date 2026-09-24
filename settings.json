@@ -167,6 +167,7 @@
   "enabledPlugins": {
     "frontend-design@claude-plugins-official": true
   },
+  "syncClaudeAiPlugins": false,
   "effortLevel": "xhigh",
   "tui": "fullscreen",
   "skipWorkflowUsageWarning": true,

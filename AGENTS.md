@@ -39,6 +39,15 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **claude.ai plugin sync is off in Claude Code; the connector policy is private**
+  (2026-09-24). Nine plugins enabled on the claude.ai account synced into every session:
+  91 skills and about 80 MCP servers. The skill listing is capped at 1% of the context
+  window, so it overflowed and cut descriptions starting with the least-used skills,
+  including the Anthropic document skills. In a Java repo, Skills cost 9.9k of the 33.2k
+  tokens at session start. `syncClaudeAiPlugins: false` keeps them on claude.ai and in
+  Cowork; synced *skills* (`syncClaudeAiSkills`) stay on. The claude.ai connectors stay
+  available, but ask rules on their outbound, hard-to-undo tools and one denied connector
+  live in machine-level managed settings, never in this public repo.
 - **Rules load by repo type at SessionStart** (2026-09-24). The open question — does a
   path-scoped rule fire when a file is read through Bash? — was answered from the
   transcripts, and the answer was no:
