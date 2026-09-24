@@ -10,7 +10,7 @@ that fires on ordinary commands teaches the session to route around it.
 Hook paths come from environment overrides, so a candidate can be tested before it
 replaces the live file — a broken live guard gates the very session editing it:
 CLAUDE_BASH_GUARD, CLAUDE_REVIEWER_GUARD, CLAUDE_SESSION_RULES, CLAUDE_LOG_INSTRUCTIONS,
-CLAUDE_SONAR_GATE_HOOK, CLAUDE_SONAR_GATE.
+CLAUDE_SONAR_GATE_HOOK, CLAUDE_SONAR_GATE, CLAUDE_VALIDATE_README.
 
 Run: python3 scripts/test_hooks.py
 """
@@ -33,6 +33,8 @@ LOG_INSTRUCTIONS = os.environ.get("CLAUDE_LOG_INSTRUCTIONS",
 SONAR_HOOK = os.environ.get("CLAUDE_SONAR_GATE_HOOK",
                             str(ROOT / "hooks" / "sonar-gate-on-stop.sh"))
 SONAR_GATE = os.environ.get("CLAUDE_SONAR_GATE", str(ROOT / "scripts" / "sonar-gate.sh"))
+VALIDATE_README = os.environ.get("CLAUDE_VALIDATE_README",
+                                 str(ROOT / "hooks" / "validate-readme.sh"))
 HOOK_OUTPUT_CAP = 9800
 
 _passes = 0
@@ -644,12 +646,48 @@ def test_sonar_gate_script() -> None:
     shutil.rmtree(fx)
 
 
+# ── validate-readme.sh ──────────────────────────────────────────────────────
+# The fixture README names a script that exists nowhere, so any invocation that really
+# checks exits 2. The fixture is its own CLAUDE_CONFIG_DIR: the live README is never read.
+def test_validate_readme() -> None:
+    fx = Path(tempfile.mkdtemp()).resolve()
+    env = {**os.environ, "CLAUDE_CONFIG_DIR": str(fx), "GIT_CONFIG_GLOBAL": "/dev/null",
+           "GIT_CONFIG_NOSYSTEM": "1"}
+    table = "# fixture\n\n## What's tracked\n\n| Path | Purpose |\n|---|---|\n| `README.md` | this |\n"
+    (fx / "README.md").write_text(table + "\nRun `ghost.sh`.\n")
+    subprocess.run(["git", "init", "-q", str(fx)], check=True, env=env)
+    subprocess.run(["git", "-C", str(fx), "add", "README.md"], check=True, env=env)
+
+    def validate(*args: str, stdin: str = "") -> subprocess.CompletedProcess:
+        return subprocess.run([VALIDATE_README, *args], input=stdin, capture_output=True,
+                              text=True, env=env, cwd=fx, timeout=30, check=False)
+
+    cases = [
+        ("an absolute path is checked", (str(fx / "README.md"),), 2, "ghost.sh"),
+        ("a relative path is checked", ("README.md",), 2, "ghost.sh"),
+        ("paths outside the repo say nothing was checked", ("/etc/hosts",), 0, "nothing checked"),
+    ]
+    for name, args, want_exit, want_err in cases:
+        proc = validate(*args)
+        check(f"validate-readme: {name}", proc.returncode == want_exit and want_err in proc.stderr,
+              f"exit {proc.returncode}, stderr {proc.stderr.strip()[:160]!r}")
+    proc = validate(stdin=json.dumps({"tool_input": {"file_path": "/etc/hosts"}}))
+    check("validate-readme: the stdin form stays silent outside the repo",
+          proc.returncode == 0 and not proc.stderr, repr(proc.stderr[:160]))
+    (fx / "README.md").write_text(table)
+    proc = validate("README.md")
+    check("validate-readme: a clean README passes", proc.returncode == 0 and not proc.stderr,
+          f"exit {proc.returncode}, stderr {proc.stderr.strip()[:160]!r}")
+    shutil.rmtree(fx)
+
+
 def run() -> None:
     test_bash_guard()
     test_reviewer_guard()
     test_session_rules()
     test_sonar_gate()
     test_sonar_gate_script()
+    test_validate_readme()
 
 
 if __name__ == "__main__":

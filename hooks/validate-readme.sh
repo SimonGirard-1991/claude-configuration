@@ -44,13 +44,23 @@ else
 fi
 [ "${#candidates[@]}" -gt 0 ] || exit 0
 
+# Relative paths resolve against $PWD before the in-repo test, and a call whose arguments
+# all fall outside the repo says so, because a silent exit 0 reads as a pass. The stdin form
+# stays silent: an edit outside this repo is its normal case.
 in_repo=""
 for f in "${candidates[@]}"; do
+  case "$f" in /*) ;; *) f="$PWD/$f" ;; esac
   case "$f" in
-    "$ROOT"/*) in_repo=1; break ;;
+    "$ROOT"/*)
+      in_repo=1
+      break
+      ;;
   esac
 done
-[ -n "$in_repo" ] || exit 0
+if [ -z "$in_repo" ]; then
+  [ "$#" -eq 0 ] || printf 'readme hook: no path given is inside %s; nothing checked\n' "$ROOT" >&2
+  exit 0
+fi
 
 # A hook that disables itself in silence is worse than no hook: settings.json still
 # advertises the gate while drift accumulates. Every bail-out below says so.
@@ -71,21 +81,21 @@ add() { errs="${errs}README DRIFT: $1"$'\n'; }
 # let a passing mention elsewhere — "scripts/lint_skills.py" inside the hooks row —
 # stand in for the row the entry is owed.
 # shellcheck disable=SC2016  # the backticks are markdown, not command substitution
-claimed=$(awk '/^## What.s tracked/{f=1; next} /^## /{f=0} f' "$README" \
-          | sed -n 's/^| *`\([^`]*\)`.*/\1/p')
+claimed=$(awk '/^## What.s tracked/{f=1; next} /^## /{f=0} f' "$README" |
+  sed -n 's/^| *`\([^`]*\)`.*/\1/p')
 
 while IFS= read -r entry; do
   [ -n "$entry" ] || continue
   if [ -d "$ROOT/$entry" ]; then needle="$entry/"; else needle="$entry"; fi
-  printf '%s\n' "$claimed" | grep -qxF -- "$needle" \
-    || add "'$needle' is tracked at the top level but the \"What's tracked\" table omits it"
+  printf '%s\n' "$claimed" | grep -qxF -- "$needle" ||
+    add "'$needle' is tracked at the top level but the \"What's tracked\" table omits it"
 done < <(git -C "$ROOT" ls-files | awk -F/ '{print $1}' | sort -u)
 
 for h in "$ROOT"/hooks/*; do
   [ -f "$h" ] || continue
   b=$(basename "$h")
-  grep -qF -- "$b" "$README" \
-    || add "hooks/$b is wired up but README.md never names it"
+  grep -qF -- "$b" "$README" ||
+    add "hooks/$b is wired up but README.md never names it"
 done
 
 while IFS= read -r p; do
@@ -93,17 +103,17 @@ while IFS= read -r p; do
   if git -C "$ROOT" check-ignore -q "$p" 2>/dev/null; then
     add "README.md lists '$p' under \"What's tracked\", but .gitignore excludes it"
   fi
-done <<< "$claimed"
+done <<<"$claimed"
 
 # shellcheck disable=SC2016  # the backticks are markdown, not command substitution
-named_scripts=$(grep -oE '`[^`]*\.(sh|py)`' "$README" | tr -d '`' \
-                | while IFS= read -r t; do basename "$t"; done | sort -u)
+named_scripts=$(grep -oE '`[^`]*\.(sh|py)`' "$README" | tr -d '`' |
+  while IFS= read -r t; do basename "$t"; done | sort -u)
 
 while IFS= read -r b; do
   [ -n "$b" ] || continue
-  [ -f "$ROOT/hooks/$b" ] || [ -f "$ROOT/scripts/$b" ] \
-    || add "README.md names '$b', which is in neither hooks/ nor scripts/"
-done <<< "$named_scripts"
+  [ -f "$ROOT/hooks/$b" ] || [ -f "$ROOT/scripts/$b" ] ||
+    add "README.md names '$b', which is in neither hooks/ nor scripts/"
+done <<<"$named_scripts"
 
 if [ -n "$errs" ]; then
   printf '%s' "$errs" >&2
