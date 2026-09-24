@@ -609,11 +609,31 @@ case " $* " in
 esac
 exit 0
 """
-STUB_CURL = """#!/bin/bash
+STUB_CURL = r"""#!/bin/bash
+page=1
+for a in "$@"; do case "$a" in p=*) page=${a#p=} ;; esac; done
+issues() { # $1 total, $2 count, $3 path, $4 rule
+  /usr/bin/jq -n --argjson t "$1" --argjson n "$2" --arg f "$3" --arg r "$4" \
+    '{paging: {total: $t}, issues: [range($n) | {component: ("local-project:" + $f),
+      rule: $r, message: "fixture", line: 7}]}'
+}
 case "$*" in
   */api/system/status*) echo '{"status":"UP"}' ;;
-  */api/ce/task*) printf '{"task":{"status":"%s"}}\\n' "$STUB_CE_STATUS" ;;
-  */api/issues/search*) echo '{"total":0,"issues":[]}' ;;
+  */api/ce/task*) printf '{"task":{"status":"%s"}}\n' "$STUB_CE_STATUS" ;;
+  */api/issues/search*)
+    case "${STUB_ISSUES:-}:$page" in
+      paged:1) issues 501 500 src/Other.java java:S1 ;;
+      paged:2) issues 501 1 src/main/java/App.java java:S2 ;;
+      huge:*)
+        if [ "$page" -le 20 ]; then issues 10001 500 src/Other.java java:S1
+        else echo '{"errors":[{"msg":"Can return only the first 10000 results."}]}'; fi ;;
+      error:*) echo '{"errors":[{"msg":"fixture"}]}' ;;
+      html:*) echo '<html><body>502 Bad Gateway</body></html>' ;;
+      listless:*) echo '{"paging":{"total":3}}' ;;
+      nototal:*) issues 1 1 src/main/java/App.java java:S2 | /usr/bin/jq -c 'del(.paging)' ;;
+      fraction:*) issues 501 500 src/Other.java java:S1 | /usr/bin/jq -c '.paging.total = 501.5' ;;
+      *) echo '{"paging":{"total":0},"issues":[]}' ;;
+    esac ;;
   *) exit 7 ;;
 esac
 """
@@ -631,18 +651,39 @@ def test_sonar_gate_script() -> None:
         path.chmod(0o755)
     env = {**os.environ, "PATH": f"{stubs}:{os.environ['PATH']}",
            "SONAR_TOKEN": "fixture", "SONAR_HOST_URL": "http://sonar.invalid"}
+    listed = fx / "files.txt"
+    listed.write_text("src/main/java/App.java\n")
+    files = ("--files", str(listed))
     cases = [
-        ("reports clean once the analysis succeeded", "task-1", "SUCCESS", 0, "clean"),
-        ("fails without a task id to wait for", "", "SUCCESS", 1, "no ceTaskId"),
-        ("fails when the analysis never finishes", "task-1", "PENDING", 1, "still PENDING"),
-        ("fails when the server rejects the analysis", "task-1", "FAILED", 1, "FAILED"),
+        ("reports clean once the analysis succeeded", "task-1", "SUCCESS", "", (), 0, "clean"),
+        ("fails without a task id to wait for", "", "SUCCESS", "", (), 1, "no ceTaskId"),
+        ("fails when the analysis never finishes", "task-1", "PENDING", "", (), 1,
+         "still PENDING"),
+        ("fails when the server rejects the analysis", "task-1", "FAILED", "", (), 1, "FAILED"),
+        ("finds a listed file's issue past the first page", "task-1", "SUCCESS", "paged", files,
+         2, "App.java:7 [java:S2]"),
+        ("refuses to count --files past the 10000 the API serves", "task-1", "SUCCESS", "huge",
+         files, 1, "cannot be counted"),
+        ("fails on an answer with no issue list", "task-1", "SUCCESS", "error", (), 1,
+         "no issue list"),
+        ("fails on an HTML answer, with its reason", "task-1", "SUCCESS", "html", files, 1,
+         "no issue list"),
+        ("fails on a total without an issue list", "task-1", "SUCCESS", "listless", files, 1,
+         "no issue list"),
+        ("fails on an answer with no total", "task-1", "SUCCESS", "nototal", (), 1, "or total"),
+        ("fails on a total that is not a whole number", "task-1", "SUCCESS", "fraction", files,
+         1, "or total"),
+        ("reports the server total without --files, from one page", "task-1", "SUCCESS", "huge",
+         (), 2, "10001 issue(s)"),
     ]
-    for name, ce, status, want_exit, want_err in cases:
-        proc = subprocess.run([SONAR_GATE, "--project-dir", str(project), "--no-boot"],
+    for name, ce, status, issues, extra, want_exit, want in cases:
+        proc = subprocess.run([SONAR_GATE, "--project-dir", str(project), "--no-boot", *extra],
                               capture_output=True, text=True, timeout=60, check=False,
-                              env={**env, "STUB_CE": ce, "STUB_CE_STATUS": status})
-        check(f"sonar-gate.sh: {name}", proc.returncode == want_exit and want_err in proc.stderr,
-              f"exit {proc.returncode}, stderr {proc.stderr.strip()[-160:]!r}")
+                              env={**env, "STUB_CE": ce, "STUB_CE_STATUS": status,
+                                   "STUB_ISSUES": issues})
+        check(f"sonar-gate.sh: {name}",
+              proc.returncode == want_exit and want in proc.stdout + proc.stderr,
+              f"exit {proc.returncode}, output {(proc.stdout + proc.stderr).strip()[-160:]!r}")
     shutil.rmtree(fx)
 
 

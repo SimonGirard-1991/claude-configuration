@@ -20,7 +20,8 @@
 #
 #     --files     restrict findings to the repo-relative paths listed in PATH, one per line.
 #                 The count and the exit status follow the filtered set, so a project with
-#                 issues elsewhere still exits clean when the listed files are clean.
+#                 issues elsewhere still exits clean when the listed files are clean. Past the
+#                 10000 open issues the API serves, the set cannot be counted: exit 1.
 #     --no-boot   fail instead of starting the container. For non-interactive callers,
 #                 which should not have infrastructure appear underneath them.
 #
@@ -55,7 +56,7 @@ EXIT_CANNOT_RUN=1
 EXIT_FINDINGS=2
 
 usage() {
-  sed -n '2,35p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,/^[^#]/{/^#/p;}' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 die() {
@@ -234,8 +235,31 @@ api_issues() {
 }
 
 issues_json=$(mktemp)
-trap 'rm -f "$build_log" "$issues_json"' EXIT
-api_issues --data-urlencode "ps=500" > "$issues_json"
+pages=$(mktemp)
+trap 'rm -f "$build_log" "$issues_json" "$pages"' EXIT
+
+# A page holds 500 issues. With --files the count is taken after filtering, so a finding in a
+# listed file on page 2 would be invisible: read every page, up to the 10000 issues the API
+# serves, and refuse to count past that. An answer with no issue list or no whole-number
+# total is an error, not "0".
+page=1
+while :; do
+  body=$(api_issues --data-urlencode "ps=500" --data-urlencode "p=$page")
+  served=$(printf '%s' "$body" | /usr/bin/jq -r \
+    'if (.issues | type) == "array" then .paging.total // .total // "" else "" end' 2>/dev/null) ||
+    served=""
+  case "$served" in
+    '' | *[!0-9]*) die "the issues API returned no issue list or total for $PROJECT_KEY (page $page)" ;;
+  esac
+  printf '%s\n' "$body" >>"$pages"
+  [ -n "$FILES_LIST" ] || break
+  [ "$served" -le 10000 ] ||
+    die "$served open issues on $PROJECT_KEY and the API serves only 10000, so --files cannot be counted"
+  [ $((page * 500)) -lt "$served" ] || break
+  page=$((page + 1))
+done
+/usr/bin/jq -s '{total: (.[0].paging.total // .[0].total), issues: (map(.issues) | add)}' \
+  "$pages" >"$issues_json"
 
 # With --files the count is of the listed files alone, so "0 issues in what you touched"
 # exits clean even while the project carries issues elsewhere. Without it, the server's own
