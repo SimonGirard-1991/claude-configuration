@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -400,6 +401,34 @@ def test_session_rules() -> None:
     shutil.rmtree(fx)
 
 
+# Both Sonar fixtures put this mktemp first on PATH. Sandboxed, macOS mktemp's default
+# directory is unwritable and it ignores $TMPDIR, so the stub refuses, and logs, any call
+# that is not an explicit template under $TMPDIR: a bare `mktemp` fails outside the sandbox
+# too.
+STRICT_MKTEMP = """#!/bin/bash
+case "${1:-}" in
+  "${TMPDIR%/}"/*X) exec /usr/bin/mktemp "$@" ;;
+esac
+printf '%s\\n' "$*" >>"$STUB_MKTEMP_LOG"
+printf 'mktemp stub: refused %s\\n' "$*" >&2
+exit 1
+"""
+
+
+def strict_mktemp(fx: Path, name: str) -> tuple[Callable[[], None], dict]:
+    stubs, refused = fx / "mktemp-bin", fx / "mktemp-refused.log"
+    stubs.mkdir()
+    (stubs / "mktemp").write_text(STRICT_MKTEMP)
+    (stubs / "mktemp").chmod(0o755)
+    env = {"PATH": f"{stubs}:{os.environ['PATH']}", "STUB_MKTEMP_LOG": str(refused)}
+
+    def verify() -> None:
+        check(f"{name}: every temp file comes from a $TMPDIR template", not refused.exists(),
+              refused.read_text().strip() if refused.exists() else "")
+
+    return verify, env
+
+
 # ── sonar-gate-on-stop.sh ───────────────────────────────────────────────────
 # A stub stands in for scripts/sonar-gate.sh: each call logs its --files list, writes
 # STUB_GATE_EDIT into the project mid-"scan" when set, and exits with STUB_GATE_EXIT.
@@ -428,7 +457,8 @@ def test_sonar_gate() -> None:
     tmp.mkdir()
     gate.write_text(STUB_GATE)
     gate.chmod(0o755)
-    env = {**os.environ, "TMPDIR": str(tmp), "CLAUDE_SONAR_GATE": str(gate),
+    verify_mktemp, mktemp_env = strict_mktemp(fx, "sonar-gate")
+    env = {**os.environ, **mktemp_env, "TMPDIR": str(tmp), "CLAUDE_SONAR_GATE": str(gate),
            "STUB_GATE_LOG": str(log), "GIT_CONFIG_GLOBAL": "/dev/null",
            "GIT_CONFIG_NOSYSTEM": "1"}
 
@@ -590,12 +620,13 @@ def test_sonar_gate() -> None:
     check("sonar-gate: with no commit to fingerprint, every Stop scans",
           codes == [0, 0] and len(calls()) == before + 2,
           f"exits {codes}, {len(calls()) - before} new calls")
+    verify_mktemp()
     shutil.rmtree(fx)
 
 
 # ── scripts/sonar-gate.sh, whose answer the Stop hook remembers ─────────────
 # Stubs on PATH stand in for curl and sleep, and a stub mvnw in the project for Maven, so
-# no SonarQube is needed. A green answer is cached, so the gate must never give one for an
+# no SonarQube is needed. TMPDIR is a fixture directory, held to by the strict mktemp. A green answer is cached, so the gate must never give one for an
 # analysis it did not wait for.
 STUB_MVNW = """#!/bin/bash
 root=$(cd "$(dirname "$0")" && pwd)
@@ -641,15 +672,18 @@ esac
 
 def test_sonar_gate_script() -> None:
     fx = Path(tempfile.mkdtemp()).resolve()
-    stubs, project = fx / "bin", fx / "project"
+    stubs, project, tmp = fx / "bin", fx / "project", fx / "tmp"
     stubs.mkdir()
     project.mkdir()
+    tmp.mkdir()
+    verify_mktemp, mktemp_env = strict_mktemp(fx, "sonar-gate.sh")
     (project / "pom.xml").write_text("<project/>\n")
     for path, text in ((project / "mvnw", STUB_MVNW), (stubs / "curl", STUB_CURL),
                        (stubs / "sleep", "#!/bin/bash\n")):
         path.write_text(text)
         path.chmod(0o755)
-    env = {**os.environ, "PATH": f"{stubs}:{os.environ['PATH']}",
+    env = {**os.environ, "PATH": f"{stubs}:{mktemp_env['PATH']}", "TMPDIR": str(tmp),
+           "STUB_MKTEMP_LOG": mktemp_env["STUB_MKTEMP_LOG"],
            "SONAR_TOKEN": "fixture", "SONAR_HOST_URL": "http://sonar.invalid"}
     listed = fx / "files.txt"
     listed.write_text("src/main/java/App.java\n")
@@ -684,6 +718,7 @@ def test_sonar_gate_script() -> None:
         check(f"sonar-gate.sh: {name}",
               proc.returncode == want_exit and want in proc.stdout + proc.stderr,
               f"exit {proc.returncode}, output {(proc.stdout + proc.stderr).strip()[-160:]!r}")
+    verify_mktemp()
     shutil.rmtree(fx)
 
 

@@ -220,7 +220,9 @@ TOKEN=$(resolve_token)
 # `clean` is not optional: without it the compiler plugin skips recompilation, the analyzers
 # see nothing, and the scan reports green on code it never read.
 log "building ($BUILD_GOAL) and scanning $PROJECT_KEY"
-build_log=$(mktemp)
+# Templated, because macOS mktemp ignores $TMPDIR and its default directory is closed under
+# the Bash sandbox.
+build_log=$(mktemp "${TMPDIR:-/tmp}/sonar-gate-build.XXXXXX")
 trap 'rm -f "$build_log"' EXIT
 
 if ! "$MVN" -B -q -f "$ROOT/pom.xml" clean "$BUILD_GOAL" >"$build_log" 2>&1; then
@@ -268,8 +270,8 @@ api_issues() {
     "$@"
 }
 
-issues_json=$(mktemp)
-pages=$(mktemp)
+issues_json=$(mktemp "${TMPDIR:-/tmp}/sonar-gate-issues.XXXXXX")
+pages=$(mktemp "${TMPDIR:-/tmp}/sonar-gate-pages.XXXXXX")
 trap 'rm -f "$build_log" "$issues_json" "$pages"' EXIT
 
 # A page holds 500 issues. With --files the count is taken after filtering, so a finding in a

@@ -160,9 +160,11 @@ fi
 
 rounds=$(cat "$counter" 2>/dev/null || echo 0)
 
-out=$(mktemp)
-err=$(mktemp)
-pat=$(mktemp)
+# Templated, because macOS mktemp ignores $TMPDIR and its default directory is closed under
+# the Bash sandbox.
+out=$(mktemp "${TMPDIR:-/tmp}/claude-sonar-out.XXXXXX")
+err=$(mktemp "${TMPDIR:-/tmp}/claude-sonar-err.XXXXXX")
+pat=$(mktemp "${TMPDIR:-/tmp}/claude-sonar-files.XXXXXX")
 trap 'rm -f "$out" "$err" "$pat"' EXIT
 printf '%s\n' "$changed" >"$pat"
 
