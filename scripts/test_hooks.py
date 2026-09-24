@@ -658,17 +658,20 @@ def test_validate_readme() -> None:
     subprocess.run(["git", "init", "-q", str(fx)], check=True, env=env)
     subprocess.run(["git", "-C", str(fx), "add", "README.md"], check=True, env=env)
 
-    def validate(*args: str, stdin: str = "") -> subprocess.CompletedProcess:
+    def validate(*args: str, stdin: str = "", cwd: Path = fx) -> subprocess.CompletedProcess:
         return subprocess.run([VALIDATE_README, *args], input=stdin, capture_output=True,
-                              text=True, env=env, cwd=fx, timeout=30, check=False)
+                              text=True, env=env, cwd=cwd, timeout=30, check=False)
 
     cases = [
-        ("an absolute path is checked", (str(fx / "README.md"),), 2, "ghost.sh"),
-        ("a relative path is checked", ("README.md",), 2, "ghost.sh"),
-        ("paths outside the repo say nothing was checked", ("/etc/hosts",), 0, "nothing checked"),
+        ("an absolute path is checked", (str(fx / "README.md"),), fx, 2, "ghost.sh"),
+        ("a relative path is checked", ("README.md",), fx, 2, "ghost.sh"),
+        ("paths outside the repo say nothing was checked", ("/etc/hosts",), fx, 0,
+         "nothing checked"),
+        ("a relative path resolves against the working directory", ("README.md",), fx.parent, 0,
+         "nothing checked"),
     ]
-    for name, args, want_exit, want_err in cases:
-        proc = validate(*args)
+    for name, args, cwd, want_exit, want_err in cases:
+        proc = validate(*args, cwd=cwd)
         check(f"validate-readme: {name}", proc.returncode == want_exit and want_err in proc.stderr,
               f"exit {proc.returncode}, stderr {proc.stderr.strip()[:160]!r}")
     proc = validate(stdin=json.dumps({"tool_input": {"file_path": "/etc/hosts"}}))

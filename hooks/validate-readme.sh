@@ -44,9 +44,8 @@ else
 fi
 [ "${#candidates[@]}" -gt 0 ] || exit 0
 
-# Relative paths resolve against $PWD before the in-repo test, and a call whose arguments
-# all fall outside the repo says so, because a silent exit 0 reads as a pass. The stdin form
-# stays silent: an edit outside this repo is its normal case.
+# Arguments that all miss the repo are reported, because a silent exit 0 reads as a pass.
+# The stdin form stays silent: an edit outside this repo is its normal case.
 in_repo=""
 for f in "${candidates[@]}"; do
   case "$f" in /*) ;; *) f="$PWD/$f" ;; esac
