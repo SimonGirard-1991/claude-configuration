@@ -48,6 +48,14 @@ Contains:
 
 Rule: an adapter can import from `application/` (to see the port it implements) and `domain/` (to construct/consume domain types). It must never be imported *from* `application/` or `domain/`.
 
+Adapters stay plumbing. Business logic lives in the domain or, failing that, in an application service. It moves into an adapter — or into SQL, as a predicate nothing else re-checks, a `CASE` or a computed column — only when it is impossible elsewhere, never because it is more convenient there: fewer round trips or "the data is already loaded" do not prove impossibility. Two tells that logic has drifted:
+- A test asserts what a mocked port was configured to return, so it tests the stub, not the rule.
+- Branch logic lands in an infrastructure package excluded from the mutation gate.
+
+The usual fix keeps the port and splits the work: the port loads a snapshot, and a pure function in the domain or application layer evaluates it.
+
+Choosing *which rows* to load over data that grows is the query's job, so a `WHERE` that bounds the load is not drift — loading everything to filter in Java is a performance defect. What must not move into an adapter or SQL is a *decision* over the loaded data: eligibility, pricing, a state transition. When the bound *is* the rule — selecting the orders eligible for auto-cancel — the domain owns the rule's inputs (a policy computes the cutoff from the injected `Clock` and passes it as a bind parameter, never SQL `now()`), the query narrows with them, and the domain re-checks each loaded row before acting. A predicate too costly to re-check stays in SQL only with a DB test per branch; mutation testing does not reach its operators.
+
 ### Framework-specific notes
 
 - **Spring Boot**: `@Service` on application services, `@Repository` on infra adapters, `@RestController` on web adapters, `@ConfigurationProperties` for config. Use constructor injection only.

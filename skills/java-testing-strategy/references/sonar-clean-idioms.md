@@ -35,9 +35,11 @@ assertThrows(IllegalStateException.class, () -> {
 
 ```java
 // accepted: setup outside, one call under assertion
+// Arrange
 var customer = Customer.reconstitute(id, name);
 customer.activate(clock);
 
+// Act + Assert
 assertThrows(IllegalStateException.class, () -> customer.activate(clock));
 ```
 

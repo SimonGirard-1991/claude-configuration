@@ -135,13 +135,15 @@ Two of those status mappings are choices, not conventions:
 
 ```java
 // order/infrastructure/grpc/mapper/PlaceOrderGrpcMapper.java
+import java.math.BigDecimal;
+
 @Component
 public class PlaceOrderGrpcMapper {
   public PlaceOrder toCommand(PlaceOrderRequest req) {
     var lines = req.getLinesList().stream()
         .map(l -> new PlaceOrder.Line(
             l.getSku(), l.getQuantity(),
-            new java.math.BigDecimal(l.getUnitPrice()), l.getCurrency()))
+            new BigDecimal(l.getUnitPrice()), l.getCurrency()))
         .toList();
     return new PlaceOrder(UUID.fromString(req.getCustomerId()), lines);
   }

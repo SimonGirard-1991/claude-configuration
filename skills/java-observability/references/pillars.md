@@ -29,6 +29,8 @@ of it.
 
 **Exemplars:** when the backend supports them (Prometheus + OpenMetrics), attach a trace ID exemplar to histogram buckets. A p99 spike in a dashboard then links directly to a slow trace. This is the cheapest way to bridge metrics → traces and should be on by default.
 
+**Testing a metric's failure path:** to make meter creation fail, subclass `SimpleMeterRegistry` and override the **protected** hook — `newTimer(Meter.Id, DistributionStatisticConfig, PauseDetector)`, and likewise `newCounter`/`newGauge`/`newDistributionSummary`. The public factories (`timer(String, String...)`, `timer(String, Tags)`, `Timer.builder(...).register(...)`) delegate to one another in a version-dependent order, and the builder skips the overloads entirely, so overriding any single public overload misses some call path, and the resilience test passes tautologically without the catch handler ever firing. Only the protected hook sees every path; count its calls to prove the failure was hit.
+
 ### Distributed tracing — per-request context
 
 **Tool: OpenTelemetry (OTel).** The Java agent auto-instruments Spring MVC/WebFlux, JDBC, Kafka clients, HTTP clients, and most common libraries. Prefer the agent for breadth; add manual spans where the auto-instrumentation misses business boundaries (use case entry points, domain-significant operations).

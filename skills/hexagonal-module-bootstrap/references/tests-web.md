@@ -45,9 +45,11 @@ class OrderControllerTest {
 
   @Test
   void POST_v1_orders_returns_201_with_location() throws Exception {
+    // Arrange
     var newId = new OrderId(UUID.randomUUID());
     when(placeOrderService.handle(any())).thenReturn(newId);
 
+    // Act + Assert
     mvc.perform(post("/v1/orders")
             .contentType(MediaType.APPLICATION_JSON)
             .content("""
@@ -64,6 +66,7 @@ class OrderControllerTest {
 
   @Test
   void POST_v1_orders_rejects_empty_lines_with_400() throws Exception {
+    // Act + Assert
     mvc.perform(post("/v1/orders")
             .contentType(MediaType.APPLICATION_JSON)
             .content("""
@@ -74,6 +77,7 @@ class OrderControllerTest {
 
   @Test
   void POST_v1_orders_rejects_malformed_json_with_400() throws Exception {
+    // Act + Assert
     mvc.perform(post("/v1/orders")
             .contentType(MediaType.APPLICATION_JSON)
             .content("{ not valid json"))
@@ -82,6 +86,7 @@ class OrderControllerTest {
 
   @Test
   void POST_v1_orders_rejects_invalid_currency_length_with_400() throws Exception {
+    // Act + Assert
     mvc.perform(post("/v1/orders")
             .contentType(MediaType.APPLICATION_JSON)
             .content("""
@@ -97,6 +102,7 @@ class OrderControllerTest {
 
   @Test
   void POST_v1_orders_rejects_non_positive_quantity_with_400() throws Exception {
+    // Act + Assert
     mvc.perform(post("/v1/orders")
             .contentType(MediaType.APPLICATION_JSON)
             .content("""
@@ -112,6 +118,7 @@ class OrderControllerTest {
 
   @Test
   void POST_v1_orders_rejects_unitPrice_as_number_with_400() throws Exception {
+    // Act + Assert
     mvc.perform(post("/v1/orders")
             .contentType(MediaType.APPLICATION_JSON)
             .content("""
@@ -147,6 +154,7 @@ class PlaceOrderRequestMapperTest {
 
   @Test
   void maps_wire_fields_verbatim_without_generating_ids_or_domain_types() {
+    // Arrange
     var customerId = UUID.randomUUID();
     var req = new PlaceOrderV1Request()
         .customerId(customerId)
@@ -156,8 +164,10 @@ class PlaceOrderRequestMapperTest {
             .unitPrice("10.00")
             .currency("EUR")));
 
+    // Act
     var cmd = mapper.toCommand(req);
 
+    // Assert
     assertThat(cmd.customerId()).isEqualTo(customerId);
     assertThat(cmd.lines()).hasSize(1);
     var line = cmd.lines().get(0);
@@ -179,8 +189,10 @@ The assertions above deal in `PlaceOrder.Line` — application command DTOs, not
 // OrderExceptionHandlerTest.java
 @Test
 void OrderAlreadyShipped_maps_to_409() throws Exception {
+  // Arrange
   when(placeOrderService.handle(any())).thenThrow(new OrderAlreadyShippedException());
 
+  // Act + Assert
   mvc.perform(post("/v1/orders").contentType(MediaType.APPLICATION_JSON).content(validBody()))
       .andExpect(status().isConflict());
 }

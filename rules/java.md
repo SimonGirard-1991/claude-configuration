@@ -25,8 +25,30 @@ cannot fire from a `**/*.java` scope, because the file being edited is the `.avs
   and do not extend them to new modules.
 - jOOQ over Hibernate/JPA; JPA only for simple CRUD with no complex queries, justified.
 - Current LTS features only; verify availability rather than assume.
+- Mainstream shapes: import types, never an inline fully-qualified name. `Optional` is a
+  return type only — never a parameter, field or record component; model absence as a
+  nullable field and expose `Optional` from an accessor — on a record, from a separately
+  named method (`maybeNickname()`), because a component accessor must return the
+  component's type. Each permitted type of a sealed interface lives in its own file, with
+  an explicit `permits`. No `permits`, `record`, `sealed`, `var` or `yield` (the words
+  JLS §3.8 bars from type names) as a local variable, parameter or field name, even where
+  javac accepts it.
+- Time comes from an injected `java.time.Clock`, never `Instant.now()` or
+  `System.currentTimeMillis()`, in any layer.
+- Versions are fetched, never recalled: the latest release (Context7, Maven Central, the
+  upstream releases page), then compatibility with the stack, then the migration notes.
+- Migrations: fix a broken migration that has not been shared in place and reset the
+  local DB; stacking fix-on-fix migrations is for history others already ran.
+  `flyway repair` rewrites the history table (realigns checksums, drops failed entries,
+  marks missing migrations deleted) and never re-runs a migration recorded as successful.
 - Sonar main-code idioms that recur: unused catch parameter takes `_` (java:S7467);
-  identical catch bodies collapse to multi-catch (java:S2147).
+  identical catch bodies collapse to multi-catch (java:S2147); a string literal of five or
+  more characters repeated three times in main code becomes a constant (java:S1192). A
+  controller overriding an OpenAPI-generated method never repeats its parameter
+  annotations: identical, they are redundant; any difference from the generated signature
+  (a generated `@NotNull` on a query parameter, say) throws HV000151 at the first
+  request. S5128 still fires on the override, so suppress java:S5128 there, with the
+  reason on the same line.
 
 ## Architecture defaults
 
@@ -49,6 +71,10 @@ cannot fire from a `**/*.java` scope, because the file being edited is the `.avs
     or reviewing an actual pipeline.
 - **SOLID is non-negotiable**, DIP at layer boundaries above all — it is what makes the
   hexagon work.
+- **Controllers are HTTP-only.** They never inject a repository, hold business logic or
+  own a transaction; even reference-data CRUD is `controller → service → repository`.
+  Whether a component deserves ports is a separate question for `hexagonal-ddd-java`;
+  whether a controller may touch a repository is always no.
 
 ## Non-functional priorities
 
@@ -75,8 +101,10 @@ checklists live there, not in memory.
 
 **Judge a diff by what it does, not by its file extension.** A changed `.avsc`, `.proto`
 or `openapi.yaml` is a contract change carrying compatibility and validation consequences,
-and it gets a real review — it is not documentation. Only prose (README, comments, ADRs)
-is genuinely out of scope. And when a dimension is arguable, run it: the cost of loading a
+and it gets a real review — it is not documentation. Prose (README, comments, ADRs) is
+out of scope for the delegated skill dimensions, not for review: a load-bearing doc — an
+ADR, a runbook, alert text, an SLO definition — still goes through `code-reviewer`, and
+only a trivial doc edit skips it. And when a dimension is arguable, run it: the cost of loading a
 skill you did not strictly need is tokens, the cost of skipping one you did is a defect
 shipped by a review that reported clean.
 
@@ -90,4 +118,16 @@ shipped by a review that reported clean.
    scope (paths or git range), and the line
    `Invocation: self-review loop, iteration N of 3`. Address 🔴 and 🟡; judge 🔵 on
    merit; cap at 3 iterations, then escalate to the user with what is outstanding.
+   A verdict covers only the diff it saw: every edit after a review goes back through the
+   reviewer within the cap, a 🔴 fix without exception; past the cap, hand the fix to the
+   user marked unreviewed. The loop adds no quality of its
+   own: submit correct code first, and mid-loop fix only the accepted findings, adding
+   nothing new.
 Relay any **Proposed memory** note verbatim; record it only on user approval.
+
+Evidence has to reach the end of the chain. A change spanning systems is verified at
+the far end — the consumer, the dashboard, the read model — not at the first hop. A
+claim that a tool enforces, covers or proves something needs a command that shows it;
+a green gate proves nothing until you can say what it measured. A bare `plugin:goal`
+such as `pitest:mutationCoverage` runs no earlier phase and re-reports stale classes, so
+a number that did not move after a change is suspect, not confirmation.

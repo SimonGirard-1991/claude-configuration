@@ -83,7 +83,10 @@ Refuse these in code you write and refactor them in code you touch.
 
 Semantic HTML first, ARIA only when semantics fall short. Every interactive element
 keyboard-reachable with a visible focus ring (never `outline: none` without a
-replacement). Labels associated with inputs (`<label htmlFor>` or wrapping). Errors
+replacement). Labels associated with inputs (`<label htmlFor>` or wrapping). Radio and
+checkbox groups: `<fieldset>` + `<legend>`, with `min-w-0` inside grid or flex parents (a
+fieldset's `min-inline-size: min-content` overflows them); NVDA announces a fieldset's
+description inconsistently, so repeat a short one on each input. Errors
 announced via `aria-describedby` / `aria-invalid`. Dialogs: focus trap, focus restoration
 on close, `Escape` to dismiss, `aria-modal`, labelled. Route changes announced. Colour
 contrast — financial red/green gain/loss on dark backgrounds is the common failure.
@@ -138,18 +141,16 @@ state). E2E: Playwright, for cross-page journeys and real-browser integration, n
 substitute for fast unit tests. Accessibility: axe-core / jest-axe / `@axe-core/playwright`
 wired into component and E2E tests, so a11y regressions fail the build rather than review.
 
-Lint/format: Biome vs ESLint + Prettier is a live trade-off — Biome for new projects
-wanting speed and one binary, ESLint + Prettier when you need plugins it does not yet
-cover (`eslint-plugin-jsx-a11y`, `eslint-plugin-testing-library`, `eslint-config-next`).
-Verify current Biome coverage via Context7 before choosing; the gap closes fast.
+Lint/format: Biome (speed, one binary) for new projects; ESLint + Prettier when you need
+plugins Biome lacks (`eslint-plugin-jsx-a11y`, `eslint-plugin-testing-library`,
+`eslint-config-next`). Check current Biome coverage via Context7; the gap closes fast.
 
 ## Library facts come from Context7
 
-Frontend churns faster than training data. Any question about a specific library or
-version-specific API — React, Next.js, TanStack Query, Zod, React Hook Form, Radix,
-shadcn/ui, Tremor — goes to Context7 first, *especially* when you are tempted to answer
-from memory. Use web search for CVEs, migration guides, post-mortems and cross-library
-comparisons, where independent sources add value.
+Frontend churns faster than training data. Library and version-specific API questions —
+React, Next.js, TanStack Query, Zod, React Hook Form, Radix, shadcn/ui, Tremor — go to
+Context7 first, *especially* when memory feels sure. Web search is for CVEs, migration
+guides, post-mortems and cross-library comparisons.
 
 ## Verification after non-trivial changes
 1. Typecheck, lint, and run the targeted tests.

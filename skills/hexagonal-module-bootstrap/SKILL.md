@@ -1,6 +1,6 @@
 ---
 name: hexagonal-module-bootstrap
-description: Use when scaffolding a new module, bounded context, aggregate, use case, port, adapter, or test suite in a Java backend following hexagonal + DDD. Provides code-ready templates (Spring Boot + jOOQ by default, with Quarkus/Micronaut variants). Covers aggregates, use cases, REST/Kafka/gRPC adapters, jOOQ repositories, anti-corruption layers, and per-layer tests. For the *rules* (when/why/where things go), see the hexagonal-ddd-java skill — this skill executes, that one explains. Skip for CRUD over reference data; flat controller+repository is correct there.
+description: Use when scaffolding a new module, bounded context, aggregate, use case, port, adapter, or test suite in a Java backend following hexagonal + DDD. Provides code-ready templates (Spring Boot + jOOQ by default, with Quarkus/Micronaut variants). Covers aggregates, use cases, REST/Kafka/gRPC adapters, jOOQ repositories, anti-corruption layers, and per-layer tests. For the *rules* (when/why/where things go), see the hexagonal-ddd-java skill — this skill executes, that one explains. Skip for CRUD over reference data; a thin controller → service → repository, with no ports, is correct there.
 ---
 
 # Hexagonal Module Bootstrap

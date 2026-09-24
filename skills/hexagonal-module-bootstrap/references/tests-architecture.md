@@ -43,7 +43,6 @@ package com.company.ecom.architecture;
 
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
-import com.tngtech.archunit.lang.ArchRule;
 import org.junit.jupiter.api.Test;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.*;
@@ -55,7 +54,7 @@ class HexagonalLayersTest {
 
   @Test
   void domain_has_no_framework_imports() {
-    ArchRule rule = noClasses()
+    noClasses()
         .that().resideInAPackage("..domain..")
         .should().dependOnClassesThat().resideInAnyPackage(
             "org.springframework..",
@@ -63,8 +62,8 @@ class HexagonalLayersTest {
             "jakarta.ws.rs..",
             "org.jooq..",
             "org.apache.kafka..",
-            "com.fasterxml.jackson..");
-    rule.check(APP);
+            "com.fasterxml.jackson..")
+        .check(APP);
   }
 
   @Test
@@ -151,10 +150,13 @@ class BoundedContextBoundariesTest {
 ## Naming conventions enforced
 
 ```java
+import com.company.ecom.order.application.port.OrderRepository;
+import org.springframework.web.bind.annotation.RestController;
+
 @Test
 void repositories_end_with_Repository() {
   classes()
-      .that().implement(com.company.ecom.order.application.port.OrderRepository.class)
+      .that().implement(OrderRepository.class)
       .should().haveSimpleNameEndingWith("Repository")
       .check(APP);
 }
@@ -162,7 +164,7 @@ void repositories_end_with_Repository() {
 @Test
 void controllers_live_in_web_package() {
   classes()
-      .that().areAnnotatedWith(org.springframework.web.bind.annotation.RestController.class)
+      .that().areAnnotatedWith(RestController.class)
       .should().resideInAPackage("..infrastructure.web..")
       .check(APP);
 }

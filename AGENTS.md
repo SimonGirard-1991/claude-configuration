@@ -39,6 +39,25 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **The retired agents' memories were triaged, not abandoned** (2026-09-24). Since the
+  09-09 retirement, 41 memory files had loaded nowhere. Each lesson went where it has to
+  load:
+  - Java conventions and verification discipline into `rules/java.md`, about 30 lines.
+  - Placement rules into `hexagonal-ddd-java` and `java-observability`.
+  - Two lines into `rules/shell.md` and one into `rules/frontend.md`.
+  - Three cross-project preferences into CLAUDE.md.
+  - Project-bound lessons into the (untracked) project memories.
+  - One review lens into the reviewer's own memory.
+
+  Covered and stale ones were deleted: restore on evidence, from an archive outside this
+  repo. Simon settled two conflicts:
+  - **AAA markers:** see the comment-doctrine entry.
+  - **The service floor:** controllers never touch repositories, and reference-data CRUD
+    is `controller → service → repository` with no ports. The skills had said "flat
+    controller → repository", and a retired memory contradicted them.
+
+  The migration had also dropped a qualifier: prose is out of scope for the delegated
+  skill dimensions, not for review. Load-bearing docs go through `code-reviewer` again.
 - **claude.ai plugin sync is off in Claude Code; the connector policy is private**
   (2026-09-24). Nine plugins enabled on the claude.ai account synced into every session:
   91 skills and about 80 MCP servers. The skill listing is capped at 1% of the context
@@ -67,7 +86,7 @@ says explicitly that the external reviewer was skipped — no retry loop.
   - The rules back in CLAUDE.md: every session pays for them.
   - A skill: model-invoked, the same non-determinism.
 
-  `shell.md` lost its `paths:` and loads everywhere (~700 tokens), because scripts appear
+  `shell.md` lost its `paths:` and loads everywhere (~770 tokens), because scripts appear
   in any repo. A "read this first" pointer would have been as unreliable as a skill.
   `hooks/log-instructions.sh` logs every load, so step 9 of the fix plan measures the
   change instead of assuming it.
@@ -141,7 +160,14 @@ says explicitly that the external reviewer was skipped — no retry loop.
   ship unopposed; reviewer bullet alone and nobody was told the rule they are judged on.
   The fix was structural — `skills/hexagonal-module-bootstrap` had carried 119
   explanatory comment lines inside its Java fences, so copying a template meant copying
-  its comment density.
+  its comment density. *Amended 2026-09-24:* test phase markers (`// Arrange`,
+  `// Act`, `// Assert`, `// Act + Assert`) are the one always-on exception. They were
+  Simon's convention all along, but they were recorded only in the retired architect's
+  memory, so the 08-11 cleanup stripped them from the templates too. Both halves carry
+  the exception now, and the templates' 23 test methods are marked again. Simon also
+  settled one carve-out: a repo whose tests already label phases with comments in another
+  vocabulary (`// given` / `// when` / `// then`) keeps its vocabulary. Spacing and
+  BDD-named APIs do not count.
 - **Reviewers hold conditional memory-write access** (2026-07-08, superseding the
   memory-file half of a 2026-04-23 read-only rule). The April rule conflated "don't
   modify the reviewed artifact" — still absolute — with "don't keep your own notebook",

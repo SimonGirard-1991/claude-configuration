@@ -41,10 +41,13 @@ class OrderTest {
 
   @Test
   void place_with_lines_emits_OrderPlaced() {
+    // Arrange
     var line = aLine("SKU-1", 2, "10.00");
 
+    // Act
     var result = Order.place(CUSTOMER, List.of(line), CLOCK);
 
+    // Assert
     assertThat(result.order().status()).isEqualTo(OrderStatus.PLACED);
     assertThat(result.event().lines()).containsExactly(line);
     assertThat(result.event().total()).isEqualTo(Money.of("20.00", "EUR"));
@@ -53,34 +56,43 @@ class OrderTest {
 
   @Test
   void place_with_no_lines_rejects() {
+    // Act + Assert
     assertThatThrownBy(() -> Order.place(CUSTOMER, List.of(), CLOCK))
         .isInstanceOf(EmptyOrderException.class);
   }
 
   @Test
   void ship_requires_PAID_state() {
+    // Arrange
     var order = placedOrder();
+
+    // Act + Assert
     assertThatThrownBy(() -> order.ship(CLOCK))
         .isInstanceOf(InvalidOrderStateException.class);
   }
 
   @Test
   void ship_a_paid_order_transitions_to_SHIPPED() {
+    // Arrange
     var order = placedOrder();
     order.markPaid(CLOCK);
 
+    // Act
     var event = order.ship(CLOCK);
 
+    // Assert
     assertThat(order.status()).isEqualTo(OrderStatus.SHIPPED);
     assertThat(event.orderId()).isEqualTo(order.id());
   }
 
   @Test
   void cannot_ship_twice() {
+    // Arrange
     var order = placedOrder();
     order.markPaid(CLOCK);
     order.ship(CLOCK);
 
+    // Act + Assert
     assertThatThrownBy(() -> order.ship(CLOCK))
         .isInstanceOf(OrderAlreadyShippedException.class);
   }
@@ -103,19 +115,26 @@ class MoneyTest {
 
   @Test
   void rejects_amount_with_too_many_decimals_for_currency() {
+    // Act + Assert
     assertThatThrownBy(() -> Money.of("10.123", "EUR"))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
   @Test
   void add_same_currency_sums_amounts() {
+    // Act + Assert
     assertThat(Money.of("10.00", "EUR").add(Money.of("5.50", "EUR")))
         .isEqualTo(Money.of("15.50", "EUR"));
   }
 
   @Test
   void add_different_currency_rejects() {
-    assertThatThrownBy(() -> Money.of("10.00", "EUR").add(Money.of("5.00", "USD")))
+    // Arrange
+    var euros = Money.of("10.00", "EUR");
+    var dollars = Money.of("5.00", "USD");
+
+    // Act + Assert
+    assertThatThrownBy(() -> euros.add(dollars))
         .isInstanceOf(IllegalArgumentException.class);
   }
 }

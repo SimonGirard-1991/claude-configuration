@@ -76,11 +76,15 @@ class PlaceOrderServiceTest {
 
   @Test
   void handle_persists_order_and_records_OrderPlaced_when_payment_authorized() {
+    // Arrange
     gateway.alwaysAuthorize();
+    var command = new PlaceOrder(UUID.randomUUID(),
+        List.of(new PlaceOrder.Line("SKU-1", 1, new BigDecimal("10.00"), "EUR")));
 
-    var id = service.handle(new PlaceOrder(UUID.randomUUID(),
-        List.of(new PlaceOrder.Line("SKU-1", 1, new BigDecimal("10.00"), "EUR"))));
+    // Act
+    var id = service.handle(command);
 
+    // Assert
     assertThat(repo.findById(id)).isPresent();
     assertThat(outbox.recorded()).hasSize(1)
         .first().isInstanceOf(OrderPlaced.class);
@@ -88,12 +92,14 @@ class PlaceOrderServiceTest {
 
   @Test
   void handle_throws_PaymentDeclined_when_gateway_declines() {
+    // Arrange
     gateway.alwaysDecline();
+    var command = new PlaceOrder(UUID.randomUUID(),
+        List.of(new PlaceOrder.Line("SKU-1", 1, new BigDecimal("10.00"), "EUR")));
 
-    assertThatThrownBy(() -> service.handle(new PlaceOrder(UUID.randomUUID(),
-        List.of(new PlaceOrder.Line("SKU-1", 1, new BigDecimal("10.00"), "EUR")))))
+    // Act + Assert
+    assertThatThrownBy(() -> service.handle(command))
         .isInstanceOf(PaymentDeclinedException.class);
-
     assertThat(repo.size()).isZero();
     assertThat(outbox.recorded()).isEmpty();
   }
@@ -118,5 +124,5 @@ Transactions cross the application/adapter boundary. In unit tests, that boundar
 ## Conventions
 
 - **One behavior per test**. If a test title has "and" in it, it's two tests.
-- **Arrange–Act–Assert** spacing is fine. Don't over-engineer with Given/When/Then BDD labels unless your team uses them everywhere.
+- **Arrange–Act–Assert, marked.** Each test method labels its phases with `// Arrange`, `// Act`, `// Assert`; `// Act + Assert` when one expression does both (`assertThatThrownBy`), no `// Arrange` when nothing is arranged. This is the user's convention and the one comment `~/.claude/CLAUDE.md` always allows. In a repo whose tests already label phases with comments in another vocabulary (`// given` / `// when` / `// then`), use that vocabulary rather than mixing two styles; blank-line spacing or BDD-named APIs (`given()`, `then()`) are not a marking convention.
 - **No Spring context** in application tests. If you need one, you're writing an integration test — put it somewhere else.

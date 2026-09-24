@@ -397,8 +397,12 @@ Example of layer 2:
 // OrderApiContractTest.java
 @Test
 void real_responses_conform_to_the_spec() {
+  // Arrange
   var validator = OpenApiInteractionValidator.createForSpecificationUrl(
       "classpath:openapi/order-v1.yaml").build();
+
+  // Act + Assert
+  fail("Skeleton: call every operation through MockMvc and pass each request and response to validator");
 }
 ```
 

@@ -63,13 +63,16 @@ class OrderRepositoryJooqTest extends AbstractContainerTest {
 
   @Test
   void save_then_findById_returns_equivalent_aggregate() {
+    // Arrange
     var order = Order.place(UUID.randomUUID(), List.of(
         new OrderLine(UUID.randomUUID(), "SKU-1", 2, Money.of("10.00", "EUR"))),
         Clock.fixed(Instant.parse("2026-01-15T10:00:00Z"), ZoneOffset.UTC)).order();
 
+    // Act
     repo.save(order);
-
     var loaded = repo.findById(order.id()).orElseThrow();
+
+    // Assert
     assertThat(loaded.id()).isEqualTo(order.id());
     assertThat(loaded.customerId()).isEqualTo(order.customerId());
     assertThat(loaded.lines()).hasSize(1);
@@ -79,10 +82,14 @@ class OrderRepositoryJooqTest extends AbstractContainerTest {
 
   @Test
   void second_save_updates_existing_row_and_bumps_version() {
+    // Arrange
     var order = placedOrder();
     repo.save(order);
+
+    // Act
     repo.save(order);
 
+    // Assert
     var count = dsl.selectCount().from(ORDERS).where(ORDERS.ID.eq(order.id().value())).fetchOne(0, Integer.class);
     assertThat(count).isEqualTo(1);
     assertThat(order.version()).isEqualTo(1);
@@ -90,6 +97,7 @@ class OrderRepositoryJooqTest extends AbstractContainerTest {
 
   @Test
   void findById_returns_empty_for_unknown_id() {
+    // Act + Assert
     assertThat(repo.findById(new OrderId(UUID.randomUUID()))).isEmpty();
   }
 }
@@ -102,18 +110,18 @@ class OrderRepositoryJooqTest extends AbstractContainerTest {
 ```java
 @Test
 void save_with_stale_version_throws_ConcurrentAggregateModificationException() {
+  // Arrange
+  var clock = Clock.fixed(Instant.parse("2026-01-15T10:00:00Z"), ZoneOffset.UTC);
   var initial = Order.place(UUID.randomUUID(), List.of(
-      new OrderLine(UUID.randomUUID(), "SKU-1", 1, Money.of("10.00", "EUR"))),
-      Clock.fixed(Instant.parse("2026-01-15T10:00:00Z"), ZoneOffset.UTC)).order();
+      new OrderLine(UUID.randomUUID(), "SKU-1", 1, Money.of("10.00", "EUR"))), clock).order();
   repo.save(initial);
-
   var loadedA = repo.findById(initial.id()).orElseThrow();
   var loadedB = repo.findById(initial.id()).orElseThrow();
-
-  loadedA.markPaid(Clock.systemUTC());
+  loadedA.markPaid(clock);
   repo.save(loadedA);
+  loadedB.cancel(clock);
 
-  loadedB.cancel(Clock.systemUTC());
+  // Act + Assert
   assertThatThrownBy(() -> repo.save(loadedB))
       .isInstanceOf(ConcurrentAggregateModificationException.class);
 }

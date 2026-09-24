@@ -1,6 +1,6 @@
 ---
 name: hexagonal-ddd-java
-description: Use when scaffolding a new bounded context, adding ports/adapters, defining aggregates/value objects/domain events, or enforcing layer boundaries in a Java backend with real business invariants. Also for multi-BC topology (context map, ACL, Spring Modulith). Skip for CRUD over reference data, health checks, admin tooling, scripts, glue code, or any component where the "domain" is just moving data between layers — a flat `controller → repository` is the correct answer there. For scaffolding templates (code-ready aggregate, use case, adapter examples), see the `hexagonal-module-bootstrap` skill.
+description: Use when scaffolding a new bounded context, adding ports/adapters, defining aggregates/value objects/domain events, or enforcing layer boundaries in a Java backend with real business invariants. Also for multi-BC topology (context map, ACL, Spring Modulith). Skip for CRUD over reference data, health checks, admin tooling, scripts, glue code, or any component where the "domain" is just moving data between layers — for an HTTP component over a database, a thin `controller → service → repository` with no ports is the correct answer (controllers never touch repositories). For scaffolding templates (code-ready aggregate, use case, adapter examples), see the `hexagonal-module-bootstrap` skill.
 ---
 
 # Hexagonal Architecture & DDD in Java
@@ -22,10 +22,12 @@ and open that reference.
 Before applying anything else in this skill, check:
 
 - Does this component enforce business invariants that must survive framework/DB changes? → **yes**: use hexagonal.
-- Is it CRUD over reference data, a health check, admin tooling, or a static lookup? → **no**: use flat `controller → repository`. Close this skill.
-- Is the "domain" really just moving data between layers with no rules to protect? → **no**: flat design. Empty aggregates and single-implementation ports are worse than no hexagon at all.
+- Is it CRUD over reference data, a health check, admin tooling, or a static lookup? → **no hexagon**. An HTTP component over a database is a thin `controller → service → repository`; a health check is an Actuator `HealthIndicator`. Close this skill.
+- Is the "domain" really just moving data between layers with no rules to protect? → **no**: thin layered design. Empty aggregates and single-implementation ports are worse than no hexagon at all.
 
-If you scaffold a `GetCountriesUseCase` with a `CountriesPort` for a static reference table, you have misapplied this skill. Stop and write a flat controller instead.
+If you scaffold a `GetCountriesUseCase` with a `CountriesPort` for a static reference table, you have misapplied this skill. Stop and write a controller over a plain service instead.
+
+"No hexagon" never means "no service": a controller is HTTP plumbing only and never injects a repository, whatever the component's shape. The service owns transactions, idempotency and orchestration even when the domain is anemic, and it is where application-level signals attach when the adapter cannot carry them — by an aspect, or a decorator if the service already has an interface, before anything inline (`java-observability` principle 8). Whether a component deserves ports is one question; whether a controller may touch a repository is another, and its answer is always no.
 
 The goal of hexagonal architecture is to **protect a domain**. When there is no domain to protect, the ceremony is pure cost.
 
@@ -146,7 +148,7 @@ These are refusals, not preferences.
 | "Put this cross-BC helper in `shared`" | Only if it's technical (Clock, Ids). If it's domain, it belongs in a BC or in neither. |
 | "Two BCs both need `Customer`, let's share it" | Not automatically. Ask: do they have the same invariants, lifecycle, and language? Usually no — keep them separate. |
 | "Let me just call the other BC's repository directly" | No — call its public API or consume its events. Direct repository access across BCs erases the boundary. |
-| "We don't need hexagonal for this, it's just CRUD" | Probably right — check the criteria at the top of this skill. If it's truly CRUD with no invariants, use flat `controller → repository` instead. |
+| "We don't need hexagonal for this, it's just CRUD" | Probably right — check the criteria at the top of this skill. If it's truly CRUD with no invariants, use a thin `controller → service → repository` instead — never a controller on a repository. |
 
 ## Minimal package skeleton
 

@@ -62,7 +62,10 @@ import com.company.ecom.order.infrastructure.db.mapper.OrderRecordMapper;
 import org.jooq.DSLContext;
 import org.springframework.stereotype.Repository;
 
+import java.time.Clock;
+import java.time.OffsetDateTime;
 import java.util.Optional;
+import java.util.UUID;
 
 import static com.company.ecom.generated.jooq.Tables.ORDERS;
 import static com.company.ecom.generated.jooq.Tables.ORDER_LINES;
@@ -72,10 +75,12 @@ public class OrderRepositoryJooq implements OrderRepository {
 
   private final DSLContext dsl;
   private final OrderRecordMapper mapper;
+  private final Clock clock;
 
-  public OrderRepositoryJooq(DSLContext dsl, OrderRecordMapper mapper) {
+  public OrderRepositoryJooq(DSLContext dsl, OrderRecordMapper mapper, Clock clock) {
     this.dsl = dsl;
     this.mapper = mapper;
+    this.clock = clock;
   }
 
   @Override
@@ -84,18 +89,21 @@ public class OrderRepositoryJooq implements OrderRepository {
         dsl.selectOne().from(ORDERS).where(ORDERS.ID.eq(order.id().value())));
 
     if (!exists) {
+      var now = OffsetDateTime.now(clock);
       dsl.insertInto(ORDERS)
           .set(ORDERS.ID, order.id().value())
           .set(ORDERS.CUSTOMER_ID, order.customerId())
           .set(ORDERS.STATUS, order.status().name())
           .set(ORDERS.VERSION, order.version())
+          .set(ORDERS.CREATED_AT, now)
+          .set(ORDERS.UPDATED_AT, now)
           .execute();
     } else {
       long newVersion = order.version() + 1;
       int updated = dsl.update(ORDERS)
           .set(ORDERS.STATUS, order.status().name())
           .set(ORDERS.VERSION, newVersion)
-          .set(ORDERS.UPDATED_AT, java.time.OffsetDateTime.now())
+          .set(ORDERS.UPDATED_AT, OffsetDateTime.now(clock))
           .where(ORDERS.ID.eq(order.id().value()))
           .and(ORDERS.VERSION.eq(order.version()))
           .execute();
@@ -111,7 +119,7 @@ public class OrderRepositoryJooq implements OrderRepository {
         dsl.insertInto(ORDER_LINES,
                 ORDER_LINES.ID, ORDER_LINES.ORDER_ID, ORDER_LINES.SKU,
                 ORDER_LINES.QUANTITY, ORDER_LINES.UNIT_PRICE, ORDER_LINES.CURRENCY)
-            .values((java.util.UUID) null, null, null, null, null, null));
+            .values((UUID) null, null, null, null, null, null));
     for (var line : order.lines()) {
       batch.bind(
           line.id(), order.id().value(), line.sku(),

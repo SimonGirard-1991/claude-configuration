@@ -29,7 +29,10 @@ macOS `/bin/bash` is 3.2: no `mapfile`, no associative arrays, no `${var^^}`. Wr
 that floor unless the target is known to be Linux, where bash 4+/5 idioms are fair game.
 Minimal images may have no bash at all — POSIX `#!/bin/sh` there; shellcheck follows the
 shebang. When you cannot verify a flag or tool exists on the target, check rather than
-assume.
+assume. The Bash tool itself runs zsh: verify a bashism with `bash -c '…'` or through the
+script's own shebang, never inline, because zsh reads a leading `0` as decimal and other
+bashisms differ too. Before writing a new script, check `~/.local/bin` for a personal
+tool that already does the job, and extend it rather than add a near-duplicate.
 
 ## Zsh is not bash
 Never run shellcheck on zsh files — it does not support the language. The gate is

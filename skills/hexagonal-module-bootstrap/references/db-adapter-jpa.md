@@ -88,7 +88,7 @@ public class OrderEntity {
 Getters and setters are omitted from both entity listings here; write them out (or generate them) in the real files — the mapper below calls them. Two decisions in `OrderEntity` are worth stating:
 
 - **`total` is not a column** — it is recomputed from lines, the same decision as the jOOQ schema in `db-adapter-jooq.md`. Keep the two adapter templates structurally aligned.
-- **`@Version` is JPA's optimistic locking, free out of the box.** Hibernate bumps the column on every successful update and throws `jakarta.persistence.OptimisticLockException` when the `WHERE` clause finds no row at the expected version. The domain aggregate carries its own `version`; map the two 1:1 in the mapper. After flush, Hibernate's version is authoritative — sync the aggregate back with `order.markPersistedAtVersion(entity.getVersion())`.
+- **`@Version` is JPA's optimistic locking, free out of the box.** Hibernate bumps the column on every successful update and fails the flush when the `WHERE` clause finds no row at the expected version; the Spring Data repository proxy translates that failure, so it surfaces as Spring's `OptimisticLockingFailureException`. The domain aggregate carries its own `version`; map the two 1:1 in the mapper. After flush, Hibernate's version is authoritative — sync the aggregate back with `order.markPersistedAtVersion(entity.getVersion())`.
 
 ```java
 // order/infrastructure/db/jpa/OrderLineEntity.java
@@ -117,6 +117,7 @@ public interface OrderJpaRepository extends JpaRepository<OrderEntity, UUID> {}
 ```java
 // order/infrastructure/db/repository/OrderRepositoryJpa.java
 import com.company.ecom.order.application.exception.ConcurrentAggregateModificationException;
+import org.springframework.dao.OptimisticLockingFailureException;
 
 @Repository
 public class OrderRepositoryJpa implements OrderRepository {
@@ -142,7 +143,7 @@ public class OrderRepositoryJpa implements OrderRepository {
       mapper.mergeInto(entity, order);
       var saved = jpa.saveAndFlush(entity);
       order.markPersistedAtVersion(saved.getVersion());
-    } catch (jakarta.persistence.OptimisticLockException e) {
+    } catch (OptimisticLockingFailureException e) {
       throw new ConcurrentAggregateModificationException(order.id(), order.version());
     }
   }
@@ -157,7 +158,7 @@ public class OrderRepositoryJpa implements OrderRepository {
 Two guards in `save` are doing load-bearing work, and both are easy to drop by accident:
 
 - **The pre-merge version check is what keeps optimistic locking alive.** Without it the load-then-merge pattern bypasses locking entirely: `findById` returns the *current* DB version, which the merge would then silently overwrite. The aggregate's own `version` is the concurrency token the caller holds — compare it against what the DB actually has right now.
-- **The `OptimisticLockException` catch covers the race the check cannot see.** Hibernate throws at flush when a concurrent transaction slipped in between `findById` and `saveAndFlush`. Translating it at the port boundary is what keeps `jakarta.persistence.*` types out of application and domain code.
+- **The `OptimisticLockingFailureException` catch covers the race the check cannot see.** The flush fails when a concurrent transaction slipped in between `findById` and `saveAndFlush`, and the repository proxy has already translated the JPA exception, so catching `jakarta.persistence.OptimisticLockException` here would never fire. Translating at the port boundary keeps persistence exceptions out of application and domain code.
 
 `saveAndFlush` (rather than `save`) is deliberate: the flush is what makes `@Version` bump, so `saved.getVersion()` is the authoritative value to sync back onto the aggregate.
 
