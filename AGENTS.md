@@ -60,21 +60,29 @@ says explicitly that the external reviewer was skipped — no retry loop.
   never gated committed branch work; it now comes from `origin/HEAD`, then `main`, then
   `master`. No repo carried `.sonar-gate` on that date, so the change waits for the
   first one that opts in.
-- **MCP keys leave the session environment; `npx` servers are pinned at the top level**
-  (2026-09-24). The shell rc exported the Brave key, and an old launcher script exported
-  it again, so every Claude session and each of its Bash subprocesses carried it;
-  `bash-guard.py` can only deny the obvious ways to print it. Now a wrapper reads the key
-  from the Keychain and `exec`s the server, the pattern fal-ai already used. That takes
-  the key out of the sessions' environment, not out of reach: the item answers any
-  process that runs `/usr/bin/security`, and any process running as this user can. The
-  wrapper starts the server from `/`, because Claude Code starts MCP servers in the
-  session's project directory, where the server's dotenv would load that project's
-  `.env` and npx would use its `.npmrc`.
+- **MCP keys leave the session environment, and the servers are pinned** (2026-09-24).
+  The shell rc exported the Brave key, and an old launcher script exported it again, so
+  every Claude session and each of its Bash subprocesses carried it; `bash-guard.py` can
+  only deny the obvious ways to print it. Now a wrapper reads the key from the Keychain
+  and runs the server, the pattern fal-ai already used. That takes the key out of the
+  sessions' environment, not out of reach: the item answers any process that runs
+  `/usr/bin/security`, and any process running as this user can. The wrapper starts the
+  server from `/`, because Claude Code starts MCP servers in the session's project
+  directory, where the server's dotenv would load that project's `.env`.
   All three `npx` servers ran unpinned — playwright as `@latest`, from an absolute nvm
-  path that the next Node upgrade would break. Each is now pinned on plain `npx`, but
-  only the top-level package: npx re-resolves dependencies for every new install
-  directory. The project-scope `.mcp.json` held only a duplicate playwright, so it went,
-  along with its enablement keys. Hook commands in `settings.json` now use `~/.claude/…`,
+  path that the next Node upgrade would break. brave-search, the one holding a key, now
+  runs from a local install with a lockfile, like fal-ai, so its whole tree is pinned.
+  context7 and playwright are pinned on plain `npx`, the top-level package only, and
+  launch with `--prefix /`: npx fetches metadata at every start from the registry the
+  launch directory's `.npmrc` names, so a project pointing at an unreachable registry
+  stopped them starting — a 70s failure, against 1s with the flag. `cd /` would have done
+  the same, but it needs a wrapper per server, and `--prefix /` needs none: npm looks for
+  the project `.npmrc` at the prefix, without moving the process. (playwright takes its
+  workspace and output directory from the client's first MCP root and falls back to its
+  working directory only when a client sends none, so `cd /` would not have moved them
+  either.) The project-scope
+  `.mcp.json` held only a duplicate playwright, so it went, along with its enablement
+  keys. Hook commands in `settings.json` now use `~/.claude/…`,
   because the absolute paths named the account and would break for any other user. That
   relies on shell form: an exec-form hook (`args`) runs without a shell, so `~` would
   stay literal, and a hook that cannot start is a non-blocking error — a guard would
