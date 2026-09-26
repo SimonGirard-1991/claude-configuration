@@ -6,6 +6,17 @@ Tests run Flyway migrations, exercise the real jOOQ DSL, and verify the mapping 
 
 ---
 
+## Contents
+
+- Base test class
+- Repository test
+- Optimistic-lock test
+- What to test here
+- What NOT to test here
+- save + outbox atomicity
+- Notes
+- Variants
+
 ## Base test class
 
 ```java

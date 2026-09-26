@@ -13,6 +13,18 @@ An ACL keeps a foreign model (external API, legacy system, another BC's events) 
 
 ---
 
+## Contents
+
+- Package layout
+- Port (defined in `application/`)
+- ACL implementation
+- Foreign client
+- Translator
+- Notes
+- Resilience (production checklist)
+- ACL for inbound integration events
+- Variants
+
 ## Package layout
 
 ```

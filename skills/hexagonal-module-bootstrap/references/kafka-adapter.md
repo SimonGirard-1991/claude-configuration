@@ -17,6 +17,13 @@ order/infrastructure/messaging/
 
 ---
 
+## Contents
+
+- Outbound event publication — outbox + relay
+- Consumer — driving adapter (ACL in action)
+- Idempotency
+- Variants
+
 ## Outbound event publication — outbox + relay
 
 The application port is `OrderEventOutbox` (see `use-case.md`), not a direct Kafka publisher. The service writes events to an outbox **table** in the same DB transaction as the aggregate. A separate **relay** reads the outbox after commit and publishes to Kafka. This keeps state change and event publication atomic from the caller's perspective, without holding a distributed transaction.

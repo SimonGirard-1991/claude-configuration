@@ -12,6 +12,16 @@ order/domain/
 
 ---
 
+## Contents
+
+- Value objects
+- Entity inside the aggregate
+- Domain exceptions
+- Domain events (sealed hierarchy)
+- Aggregate root
+- Notes
+- Variants
+
 ## Value objects
 
 ```java

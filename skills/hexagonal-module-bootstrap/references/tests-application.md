@@ -6,6 +6,15 @@ Test the orchestration. Domain logic is already covered by domain tests — don'
 
 ---
 
+## Contents
+
+- Placement
+- Fakes
+- Service test
+- When to use Mockito
+- Transactional behavior
+- Conventions
+
 ## Placement
 
 ```

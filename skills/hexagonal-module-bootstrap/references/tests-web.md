@@ -8,6 +8,14 @@ Spring Boot: `@WebMvcTest` spins up the minimum context needed for a controller.
 
 ---
 
+## Contents
+
+- Controller test
+- Mapper tests
+- Exception-handler test
+- Variants
+- Notes
+
 ## Controller test
 
 ```java

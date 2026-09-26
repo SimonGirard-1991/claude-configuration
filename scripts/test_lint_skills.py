@@ -272,6 +272,31 @@ def run() -> None:
     check("real H1 -> H3 jump", codes_for(t), expect="HEADING_JUMP")
     shutil.rmtree(t)
 
+    # ── contents lists in long references ─────────────────────────────────
+    filler = "line\n" * 110
+    cases = [
+        ("a long reference without contents", "# A\n\nIntro.\n\n## One\n\n" + filler, "expect"),
+        ("a long reference opening on contents",
+         "# A\n\nIntro.\n\n## Contents\n\n- One\n\n## One\n\n" + filler, "forbid"),
+        ("a short reference needs no contents", "# A\n\n## One\n\n" + "line\n" * 90, "forbid"),
+        ("contents that is not the first H2",
+         "# A\n\n## One\n\n" + filler + "\n## Contents\n\n- One\n", "expect"),
+        ("a Contents heading inside a fence does not count",
+         "# A\n\n```md\n## Contents\n```\n\n## One\n\n" + filler, "expect"),
+    ]
+    for label, body, mode in cases:
+        t = fresh()
+        build(t, "a", "See `references/alpha.md`.\n", {"alpha.md": body})
+        if mode == "expect":
+            check(label, codes_for(t), expect="REF_NO_TOC")
+        else:
+            check(label, codes_for(t), forbid="REF_NO_TOC")
+        shutil.rmtree(t)
+    t = fresh()
+    build(t, "a", "See `references/alpha.md`.\n\n## Section\n\n" + filler, {"alpha.md": "# A\n"})
+    check("a long SKILL.md is not a reference", codes_for(t), forbid="REF_NO_TOC")
+    shutil.rmtree(t)
+
     # ── skill names ──────────────────────────────────────────────────────
     t = fresh()
     build(t, "hexagonal-ddd-java", "The real skill.\n")

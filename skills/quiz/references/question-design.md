@@ -4,6 +4,20 @@ How to write the `quiz-data.json` that `build_quiz.py` turns into a playable qui
 The engine is fixed and tested — your only job is the **question data**, and its
 quality is the whole quiz. Read the target chapter fully first.
 
+## Contents
+
+- The one rule that matters most: faithfulness
+- The second rule: no length tell
+- The third check: adversarial defensibility (semantic, not mechanical)
+- JSON schema
+- Calibration (scale to the chapter's richness)
+- Writing foundation MCQs (`questions`)
+- Writing senior tells (`senior`)
+- Writing whiteboard prompts (`whiteboard`)
+- Themes (the controlled vocabulary)
+- Formatting notes
+- Before you hand off
+
 ## The one rule that matters most: faithfulness
 
 Every fact, number, name, and claim must be **grounded in the chapter text**. No

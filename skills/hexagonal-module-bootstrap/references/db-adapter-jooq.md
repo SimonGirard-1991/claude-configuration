@@ -16,6 +16,15 @@ jOOQ-generated classes live under `src/main/generated-jooq/` and are committed t
 
 ---
 
+## Contents
+
+- Migration reminder
+- Repository implementation
+- Mapper
+- Transaction handling
+- Notes
+- Variants — non-jOOQ
+
 ## Migration reminder
 
 Flyway migrations live in `src/main/resources/db/migration/`. Representative schema:

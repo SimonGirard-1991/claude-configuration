@@ -52,6 +52,7 @@ BUILTIN_SKILLS = {
 # Documents that legitimately exist outside a references/ directory. Naming one
 # from inside references/ is a normal cross-reference, not a dangling sibling.
 ROOT_DOCS = {"SKILL.md", "README.md", "CLAUDE.md", "AGENTS.md", "MEMORY.md"}
+REF_TOC_LINES = 100
 
 # Spine sections a reference header may claim SKILL.md carries.
 SPINE_CLAIMS = {
@@ -308,6 +309,20 @@ def check_headings(path: Path, body: str, expect_h1: bool, rep: Report) -> None:
             rep.err(path, li, "HEADING_JUMP", f"heading level jumps H{a} -> H{b}")
 
 
+def check_reference_contents(ref: Path, lines: list[str], rep: Report) -> None:
+    """Anthropic's skill-authoring guide asks references past 100 lines to open with a
+    contents list, so a partial read still shows the file's whole scope. "Opens with"
+    means the first H2, not a line number: an intro can run long before the first
+    section, and a list placed above it would swallow the intro."""
+    if len(lines) <= REF_TOC_LINES:
+        return
+    first_h2 = next((line for _, line in outside_fences(lines) if line.startswith("## ")), None)
+    if first_h2 is None or first_h2.strip() != "## Contents":
+        rep.err(ref, 1, "REF_NO_TOC",
+                f"{len(lines)} lines with no '## Contents' as its first H2; list the H2 "
+                "sections there, so a partial read still shows the whole file")
+
+
 def check_skill_names(path: Path, body: str, known: set[str], rep: Report) -> None:
     """Only a near-miss on a real skill name is certain enough to block.
 
@@ -435,6 +450,7 @@ def lint(skills_dir: Path, agents_dir: Path, scope: Path | None = None,
             check_sufficiency(ref, rlines, rep)
             check_positional(ref, rlines, rep)
             check_headings(ref, rb, expect_h1=True, rep=rep)
+            check_reference_contents(ref, rlines, rep)
             check_skill_names(ref, rb, known, rep)
 
     if agents_dir.is_dir():

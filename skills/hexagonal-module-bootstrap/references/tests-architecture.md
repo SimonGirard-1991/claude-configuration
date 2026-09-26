@@ -10,6 +10,15 @@ Using both is fine and gives belt-and-braces coverage.
 
 ---
 
+## Contents
+
+- Spring Modulith
+- ArchUnit rules
+- Multi-BC boundary rules
+- Naming conventions enforced
+- Notes
+- Variants
+
 ## Spring Modulith
 
 ```java

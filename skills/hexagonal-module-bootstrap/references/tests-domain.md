@@ -6,6 +6,14 @@ Domain tests should read like business specifications. If you need a mock here, 
 
 ---
 
+## Contents
+
+- Placement
+- Aggregate behavior
+- Value object tests
+- Conventions
+- Coverage expectations
+
 ## Placement
 
 ```

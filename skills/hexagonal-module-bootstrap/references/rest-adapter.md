@@ -26,6 +26,19 @@ order/
 
 ---
 
+## Contents
+
+- OpenAPI contract
+- Build plugin
+- Controller (implements the generated interface)
+- Mappers
+- Exception handling
+- Contract conformance testing
+- Evolving the contract
+- Notes
+- Variants
+- A word on code-first
+
 ## OpenAPI contract
 
 **3.0.3 is the safe default**: the Java/Spring generators have years of mileage against it. 3.1.0 has cleaner JSON Schema semantics (true draft-2020-12 alignment, no more `nullable`), but generator support is still uneven across versions. Bump it only if your team has explicitly validated 3.1.0 against the generator version pinned below.

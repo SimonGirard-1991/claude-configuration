@@ -6,6 +6,11 @@ of it.
 
 ---
 
+## Contents
+
+- Multi bounded context
+- Modular Monolith is the default; microservices are an escalation
+
 ## Multi bounded context
 
 Single-BC rules scale up to multi-BC by treating each BC as a self-contained hexagon with its own `domain`/`application`/`infrastructure`, plus explicit rules for *how BCs talk to each other*.

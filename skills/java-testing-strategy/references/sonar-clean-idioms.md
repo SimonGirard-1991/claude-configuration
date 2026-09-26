@@ -6,6 +6,15 @@ of it.
 
 ---
 
+## Contents
+
+- Why these three
+- `java:S5778` — one throwing call per `assertThrows` (14 of 31)
+- `java:S9015` — `@Mock` fields, not `mock()` (6 of 31)
+- `java:S5853` — chain assertions on one subject (2 of 31)
+- When Sonar is wrong
+- Keeping this list honest
+
 ## Why these three
 
 A SonarQube scan of a Spring Boot + jOOQ backend (178 files, 5,268 ncloc, ~3.5 months of

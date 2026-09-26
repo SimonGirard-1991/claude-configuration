@@ -1,5 +1,16 @@
 # JPA Repository Adapter
 
+## Contents
+
+- Read this first
+- Hexagonal rule that still applies
+- Package layout
+- Entities
+- Spring Data interface
+- Port implementation
+- Mapper
+- Notes
+
 ## Read this first
 
 **Default persistence in this skill is jOOQ.** See `db-adapter-jooq.md`. This file exists because JPA is a legitimate choice for some projects, not because it's forbidden.
