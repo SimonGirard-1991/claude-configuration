@@ -8,8 +8,6 @@
   "permissions": {
     "allow": [
       "WebSearch",
-      "WebFetch(domain:discord.com)",
-      "WebFetch(domain:docs.discord.com)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
       "Bash(git log:*)",
