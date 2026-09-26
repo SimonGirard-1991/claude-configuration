@@ -1,4 +1,5 @@
 {
+  "syncClaudeAiPlugins": false,
   "attribution": {
     "commit": "",
     "pr": "",
@@ -85,7 +86,8 @@
     "ask": [
       "Read(**/*.pem)",
       "Read(**/id_rsa*)",
-      "Read(**/id_ed25519*)"
+      "Read(**/id_ed25519*)",
+      "Bash(dangerouslyDisableSandbox:true)"
     ],
     "defaultMode": "auto"
   },
@@ -167,10 +169,62 @@
   "enabledPlugins": {
     "frontend-design@claude-plugins-official": true
   },
-  "syncClaudeAiPlugins": false,
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": false,
+    "filesystem": {
+      "allowWrite": [
+        "~/.npm/_cacache",
+        "~/.npm/_logs"
+      ],
+      "denyRead": [
+        "~/**/.env",
+        "~/**/.env.local",
+        "~/**/.env.*.local",
+        "~/**/.envrc"
+      ]
+    },
+    "credentials": {
+      "files": [
+        {
+          "path": "~/.docker/config.json",
+          "mode": "deny"
+        },
+        {
+          "path": "~/.kube/config",
+          "mode": "deny"
+        },
+        {
+          "path": "~/.config/gh/hosts.yml",
+          "mode": "deny"
+        }
+      ]
+    },
+    "excludedCommands": [
+      "docker *",
+      "gh *",
+      "git push *",
+      "git pull *",
+      "git fetch *",
+      "git clone *",
+      "git ls-remote *",
+      "ssh *",
+      "scp *",
+      "kubectl *",
+      "mvn *",
+      "./mvnw *",
+      "./gradlew *",
+      "gradle *"
+    ]
+  },
   "effortLevel": "xhigh",
   "tui": "fullscreen",
   "skipWorkflowUsageWarning": true,
   "preferredNotifChannel": "iterm2_with_bell",
-  "agentPushNotifEnabled": true
+  "agentPushNotifEnabled": true,
+  "modelSettings": {
+    "claude-opus-5-5": {
+      "effortLevel": "xhigh"
+    }
+  }
 }
