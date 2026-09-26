@@ -212,7 +212,8 @@
       "mvn *",
       "./mvnw *",
       "./gradlew *",
-      "gradle *"
+      "gradle *",
+      "~/.claude/scripts/sonar-gate.sh *"
     ]
   },
   "effortLevel": "xhigh",

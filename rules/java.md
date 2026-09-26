@@ -110,9 +110,11 @@ shipped by a review that reported clean.
 
 ## Verification after non-trivial changes
 1. Compile and run the targeted tests.
-2. If the repo has a `.sonar-gate` file, run `~/.claude/scripts/sonar-gate.sh`
-   (`--project-dir` for the repo); fix or justify every finding on the same line,
-   and list every suppression in the hand-back.
+2. If the repo has a `.sonar-gate` file, run
+   `~/.claude/scripts/sonar-gate.sh --project-dir <repo>` exactly so, alone in the call:
+   only that text matches its sandbox exclusion, and sandboxed, Maven, the scanner and
+   docker all fail. Fix or justify every finding on the same line, and list every
+   suppression in the hand-back.
 3. Spawn `code-reviewer` with: what changed and why, the calibration tier
    (throwaway / internal tool / production service / critical financial system), the
    scope (paths or git range), and the line
