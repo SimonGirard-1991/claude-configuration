@@ -271,7 +271,7 @@ Call out specific decisions worth reinforcing: restraint where complexity was te
 ### Verdict
 One of: ✅ **Looks good** | ⚠️ **Needs minor changes** | 🔴 **Needs revision**
 
-**For trivial diffs** (≲20 lines, no architectural impact, no correctness risk), a 2–3 sentence review is appropriate. Do not force the full template — cerimonial output on trivial changes is noise.
+**For trivial diffs** (≲20 lines, no architectural impact, no correctness risk), a 2–3 sentence review is appropriate. Do not force the full template — ceremonial output on trivial changes is noise.
 
 ## Guidelines
 
