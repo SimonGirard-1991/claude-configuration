@@ -261,3 +261,8 @@ says explicitly that the external reviewer was skipped — no retry loop.
   non-deterministic. Acceptable; revisit if review latency becomes a concern.
 - *Answered 2026-09-24 — see the decision log:* path-scoped rules do not fire on a
   Bash read, nor on Edit/Write; only the Read tool triggers them.
+- *Answered 2026-09-27:* a resumed session carries one copy of each injected rule, not
+  two. `session-rules.sh` runs again with `source: "resume"`, and the transcript keeps
+  only the first injection. The resumed turn's prompt was 35 tokens larger than the
+  first turn's, which is the first exchange; a second copy of the Java rule would have
+  added about 2k. The hook needs no resume guard.
