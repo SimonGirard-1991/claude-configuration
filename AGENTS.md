@@ -47,9 +47,12 @@ says explicitly that the external reviewer was skipped — no retry loop.
   could be blocked by drift it cannot fix. Under the sandbox, no subagent can fix
   `skills/`, `rules/` or `hooks/` through Bash either. The matcher is now an allowlist:
   `general-purpose`, `claude`, `learning-doc-writer` and `statusline-setup`. An editing
-  agent missing from the list, a fork for instance, still does not escape the check,
-  because the main session's Stop hook runs the same validators at the end of the turn.
-  When a new agent that can edit is added, add it to the matcher too.
+  agent missing from the list still does not escape the check, because the main
+  session's Stop hook runs the same validators at the end of the turn. `fork` is left out
+  on purpose. The check covers the whole tree, so any listed agent can be blocked for
+  drift the main session has not finished, but a fork is the likeliest case, since it is
+  spawned mid-change with the main session's context. When a new agent that can edit
+  is added, add it to the matcher too.
 - **Secret environment variables are named in managed settings, not here** (2026-09-26).
   The sandbox strips a variable only when `sandbox.credentials.envVars` names it, and a
   token's name can name its project, which in this public repo can be a client's. The two
@@ -179,7 +182,8 @@ says explicitly that the external reviewer was skipped — no retry loop.
   It fails closed. Test runners and builds still pass, because the prompt's
   `git status` invariant covers their side effects. `SubagentStop` now skips
   `code-reviewer`, `Explore` and `Plan`: a read-only agent cannot fix README drift, so
-  blocking it up to eight times achieved nothing.
+  blocking it up to eight times achieved nothing. *Superseded 2026-09-27:* the matcher is
+  now an allowlist of editing agents, forks excepted; see that entry.
 - **`bash-guard.py` judges each command segment, pinned by a fixture table**
   (2026-09-24). An audit ran 66 commands through the old guard and 25 got the wrong
   answer. A template name anywhere in a command (`.env.example`) exempted all of it, so
@@ -261,8 +265,10 @@ says explicitly that the external reviewer was skipped — no retry loop.
   non-deterministic. Acceptable; revisit if review latency becomes a concern.
 - *Answered 2026-09-24 — see the decision log:* path-scoped rules do not fire on a
   Bash read, nor on Edit/Write; only the Read tool triggers them.
-- *Answered 2026-09-27:* a resumed session carries one copy of each injected rule, not
-  two. `session-rules.sh` runs again with `source: "resume"`, and the transcript keeps
-  only the first injection. The resumed turn's prompt was 35 tokens larger than the
-  first turn's, which is the first exchange; a second copy of the Java rule would have
-  added about 2k. The hook needs no resume guard.
+- *Answered 2026-09-27, CLI 2.1.283:* a resumed session carries one copy of each
+  injected rule, not two. `session-rules.sh` runs again with `source: "resume"`, but the
+  resume writes no second injection record to the transcript. The resumed turn's prompt
+  was 35 tokens larger than the first turn's: the first reply plus the second prompt. A
+  second copy of the Java rule would have added about 2k. Which copy survives, the
+  original or the fresh one, was not measured. Either way the hook needs no resume guard,
+  since a guard that dropped the fresh copy could leave none.

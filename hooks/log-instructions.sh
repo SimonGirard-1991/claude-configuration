@@ -1,8 +1,10 @@
 #!/bin/bash
 # InstructionsLoaded: append one line per instruction-file load to logs/rules.jsonl.
 #
-# The event fires only for CLAUDE.md and rules/*.md files, so other instruction files
-# never reach this log: AGENTS.md loads into ~/.claude sessions and leaves no line here.
+# The event fires for CLAUDE.md and rules/*.md loads, and for any file a CLAUDE.md
+# imports (load_reason "include"). It does not fire when AGENTS.md is read directly as
+# project instructions, which is how it loads in ~/.claude sessions, so those loads
+# leave no line here.
 #
 # The event has no decision control and ignores exit codes and output, so the log is the
 # hook's only product, and a dead logger shows only as silence. It therefore records
