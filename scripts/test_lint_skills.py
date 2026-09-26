@@ -283,6 +283,13 @@ def run() -> None:
          "# A\n\n## One\n\n" + filler + "\n## Contents\n\n- One\n", "expect"),
         ("a Contents heading inside a fence does not count",
          "# A\n\n```md\n## Contents\n```\n\n## One\n\n" + filler, "expect"),
+        ("exactly 100 lines needs no contents", "# A\n\n## One\n\n" + "line\n" * 96, "forbid"),
+        ("101 lines needs contents", "# A\n\n## One\n\n" + "line\n" * 97, "expect"),
+        ("a long reference with no H2 at all", "# A\n\n" + filler, "expect"),
+        ("trailing spaces on the Contents heading",
+         "# A\n\n## Contents  \n\n- One\n\n## One\n\n" + filler, "forbid"),
+        ("contents buried under a 60-line intro",
+         "# A\n\n" + "intro\n" * 60 + "\n## Contents\n\n- One\n\n## One\n\n" + filler, "expect"),
     ]
     for label, body, mode in cases:
         t = fresh()
@@ -295,6 +302,37 @@ def run() -> None:
     t = fresh()
     build(t, "a", "See `references/alpha.md`.\n\n## Section\n\n" + filler, {"alpha.md": "# A\n"})
     check("a long SKILL.md is not a reference", codes_for(t), forbid="REF_NO_TOC")
+    shutil.rmtree(t)
+    t = fresh()
+    build(t, "a", "See `references/alpha.md`.\n",
+          {"alpha.md": "# A\n\n```java\nint x;\n\n## Contents\n\n## One\n\n" + filler})
+    check("an unterminated fence does not also report missing contents",
+          codes_for(t), forbid="REF_NO_TOC")
+    shutil.rmtree(t)
+
+    toc_cases = [
+        ("an accurate list", "- One\n- Two\n", "forbid"),
+        ("a list missing a section", "- One\n", "expect"),
+        ("a list naming a renamed section", "- One\n- Deux\n", "expect"),
+        ("a list out of order", "- Two\n- One\n", "expect"),
+    ]
+    for label, listed, mode in toc_cases:
+        t = fresh()
+        build(t, "a", "See `references/alpha.md`.\n",
+              {"alpha.md": "# A\n\n## Contents\n\n" + listed + "\n## One\n\n### Detail\n\n"
+                           + filler + "\n## Two\n\ntext\n"})
+        if mode == "expect":
+            check(f"contents drift: {label}", codes_for(t), expect="REF_TOC_DRIFT")
+        else:
+            check(f"contents drift: {label}", codes_for(t), forbid="REF_TOC_DRIFT")
+        shutil.rmtree(t)
+
+    t = fresh()
+    build(t, "a", "See `references/alpha.md`.\n",
+          {"alpha.md": "# A\n\n`SKILL.md` holds this skill's rules.\n\n## Contents\n\n"
+                       "- Refusals and escalation\n\n## Refusals and escalation\n\ntext\n"})
+    check("a contents entry is not a header claim about SKILL.md", codes_for(t),
+          forbid="HEADER_CLAIM")
     shutil.rmtree(t)
 
     # ── skill names ──────────────────────────────────────────────────────

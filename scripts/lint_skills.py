@@ -53,6 +53,7 @@ BUILTIN_SKILLS = {
 # from inside references/ is a normal cross-reference, not a dangling sibling.
 ROOT_DOCS = {"SKILL.md", "README.md", "CLAUDE.md", "AGENTS.md", "MEMORY.md"}
 REF_TOC_LINES = 100
+REF_TOC_WITHIN = 50
 
 # Spine sections a reference header may claim SKILL.md carries.
 SPINE_CLAIMS = {
@@ -312,15 +313,35 @@ def check_headings(path: Path, body: str, expect_h1: bool, rep: Report) -> None:
 def check_reference_contents(ref: Path, lines: list[str], rep: Report) -> None:
     """Anthropic's skill-authoring guide asks references past 100 lines to open with a
     contents list, so a partial read still shows the file's whole scope. "Opens with"
-    means the first H2, not a line number: an intro can run long before the first
-    section, and a list placed above it would swallow the intro."""
-    if len(lines) <= REF_TOC_LINES:
+    means the first H2, not a fixed line: an intro can run long before the first
+    section, and a list placed above it would swallow the intro. The bound only keeps
+    the list inside a head-of-file preview. A list that exists must also match the H2s
+    after it, because a stale list misleads a partial read as badly as a missing one."""
+    headings = [(i, line.strip()) for i, line in outside_fences(lines)
+                if re.match(r"#{1,6} \S", line)]
+    h2 = [(i, text) for i, text in headings if text.startswith("## ")]
+    has_toc = bool(h2) and h2[0][1] == "## Contents"
+    if len(lines) > REF_TOC_LINES and not (has_toc and h2[0][0] <= REF_TOC_WITHIN):
+        rep.err(ref, h2[0][0] if h2 else 1, "REF_NO_TOC",
+                f"{len(lines)} lines with no '## Contents' as its first H2 within the first "
+                f"{REF_TOC_WITHIN} lines; list the H2 sections there, so a partial read "
+                "still shows the whole file")
+    if not has_toc:
         return
-    first_h2 = next((line for _, line in outside_fences(lines) if line.startswith("## ")), None)
-    if first_h2 is None or first_h2.strip() != "## Contents":
-        rep.err(ref, 1, "REF_NO_TOC",
-                f"{len(lines)} lines with no '## Contents' as its first H2; list the H2 "
-                "sections there, so a partial read still shows the whole file")
+    start = h2[0][0]
+    end = next((i for i, _ in headings if i > start), len(lines) + 1)
+    listed = [line[2:].strip() for i, line in outside_fences(lines)
+              if start < i < end and line.startswith("- ")]
+    sections = [text[3:].strip() for _, text in h2[1:]]
+    if listed != sections:
+        missing = [s for s in sections if s not in listed]
+        extra = [s for s in listed if s not in sections]
+        detail = "; ".join(filter(None, [
+            f"missing {missing}" if missing else "",
+            f"not a section {extra}" if extra else "",
+        ])) or "order differs from the sections"
+        rep.err(ref, start, "REF_TOC_DRIFT",
+                f"contents list does not match the H2s after it: {detail}")
 
 
 def check_skill_names(path: Path, body: str, known: set[str], rep: Report) -> None:
@@ -444,13 +465,19 @@ def lint(skills_dir: Path, agents_dir: Path, scope: Path | None = None,
             if rb is None:
                 continue
             rlines = rb.splitlines()
-            check_fences(ref, rlines, rep)
+            broken_fence = check_fences(ref, rlines, rep)
             check_reference_paths(ref, rb, siblings, rep)
-            check_header_claims(ref, "\n".join(rlines[:12]), spine_lc, rep)
+            # The header ends at the first section: a contents list inside the 12-line
+            # window would otherwise read as claims about SKILL.md.
+            first_h2 = next((i for i, line in outside_fences(rlines)
+                             if line.startswith("## ")), None)
+            head_end = 12 if first_h2 is None else min(12, first_h2 - 1)
+            check_header_claims(ref, "\n".join(rlines[:head_end]), spine_lc, rep)
             check_sufficiency(ref, rlines, rep)
             check_positional(ref, rlines, rep)
             check_headings(ref, rb, expect_h1=True, rep=rep)
-            check_reference_contents(ref, rlines, rep)
+            if not broken_fence:
+                check_reference_contents(ref, rlines, rep)
             check_skill_names(ref, rb, known, rep)
 
     if agents_dir.is_dir():
