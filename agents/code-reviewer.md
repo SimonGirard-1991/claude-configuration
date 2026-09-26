@@ -175,7 +175,12 @@ matching file; this is the review shape.
   visible focus, labels associated with inputs, errors announced (`aria-describedby`,
   `aria-invalid`), dialog focus trap and restoration plus `Escape`, route changes
   announced, contrast (red/green gain-loss on dark is the common fail), reduced motion,
-  `alt` present, icon-only buttons named.
+  `alt` present, icon-only buttons named. The bar is WCAG 2.2 AA, so also: targets at
+  least 24×24 CSS px or spaced to match (inline links exempt), a focused element never
+  entirely hidden under sticky UI, a click or tap alternative to every custom drag (a
+  keyboard path alone doesn't count), data already given in a flow auto-filled or
+  selectable (security re-entry is exempt), paste and password managers accepted at every
+  authentication step including OTP, and repeated help kept in the same relative order.
 - **Async surfaces**: loading, error and empty states all present. Race conditions — stale
   closures, out-of-order responses, navigation mid-fetch. Query keys stable and
   hierarchical, invalidated on mutation; optimistic updates roll back on error. Error
