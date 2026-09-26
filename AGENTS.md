@@ -41,6 +41,16 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **Secret environment variables are named in managed settings, not here** (2026-09-26).
+  The sandbox strips a variable only when `sandbox.credentials.envVars` names it, and a
+  token's name can name its project, which in this public repo can be a client's. The two
+  project-token entries moved to machine-level managed settings. Deny entries merge across
+  every settings scope, so the effect is unchanged: both tokens are absent from a sandboxed
+  environment and present outside it, checked both ways. The unpushed commits that carried
+  the names were rebuilt before any push. The shell rc still exports both tokens, so
+  unsandboxed processes and hooks inherit them. The stronger option, having each consumer
+  read the Keychain as brave-search does, was not taken. A new secret variable goes to
+  managed settings the same way.
 - **This file loads in `~/.claude` sessions, and stays** (2026-09-24). `/context` showed
   it injected as project memory at session start, which contradicted this file's first
   paragraph and README's row, both of which said nothing here loads. Renaming it out of
@@ -122,7 +132,8 @@ says explicitly that the external reviewer was skipped — no retry loop.
   tokens at session start. `syncClaudeAiPlugins: false` keeps them on claude.ai and in
   Cowork; synced *skills* (`syncClaudeAiSkills`) stay on. The claude.ai connectors stay
   available, but ask rules on their outbound, hard-to-undo tools and one denied connector
-  live in machine-level managed settings, never in this public repo.
+  live in machine-level managed settings, never in this public repo. There are 28 ask
+  rules as of 2026-09-26, up from 9, re-derived from the connectors' tool lists that day.
 - **Rules load by repo type at SessionStart** (2026-09-24). The open question — does a
   path-scoped rule fire when a file is read through Bash? — was answered from the
   transcripts, and the answer was no:
