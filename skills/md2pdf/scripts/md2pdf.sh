@@ -62,22 +62,36 @@ die() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -s|--style)
+    -s | --style)
       [[ $# -ge 2 ]] || die "$1 requires a value"
-      STYLE="$2"; shift 2 ;;
-    -e|--engine)
+      STYLE="$2"
+      shift 2
+      ;;
+    -e | --engine)
       [[ $# -ge 2 ]] || die "$1 requires a value"
-      ENGINE="$2"; shift 2 ;;
-    -n|--dry-run)
-      DRY_RUN=1; shift ;;
+      ENGINE="$2"
+      shift 2
+      ;;
+    -n | --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
     --no-mermaid)
-      NO_MERMAID=1; shift ;;
-    -h|--help)
-      usage; exit 0 ;;
+      NO_MERMAID=1
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
     --)
-      shift; EXTRA=("$@"); break ;;
+      shift
+      EXTRA=("$@")
+      break
+      ;;
     -*)
-      die "unknown option: $1 (see --help)" ;;
+      die "unknown option: $1 (see --help)"
+      ;;
     *)
       if [[ -z "$INPUT" ]]; then
         INPUT="$1"
@@ -86,11 +100,15 @@ while [[ $# -gt 0 ]]; do
       else
         die "unexpected argument: $1"
       fi
-      shift ;;
+      shift
+      ;;
   esac
 done
 
-[[ -n "$INPUT" ]] || { usage >&2; exit 1; }
+[[ -n "$INPUT" ]] || {
+  usage >&2
+  exit 1
+}
 [[ -f "$INPUT" ]] || die "input file not found: $INPUT"
 [[ -n "$OUTPUT" ]] || OUTPUT="${INPUT%.*}.pdf"
 [[ "$OUTPUT" != "$INPUT" ]] || die "output would overwrite input: $INPUT"
@@ -129,7 +147,7 @@ FILTER=()
 if grep -qE '^[[:space:]]*```+[[:space:]]*mermaid\b' "$INPUT"; then
   if command -v mermaid-filter >/dev/null 2>&1; then
     FILTER=(-F mermaid-filter)
-    export MERMAID_FILTER_FORMAT="${MERMAID_FILTER_FORMAT:-pdf}"  # vector, for LaTeX
+    export MERMAID_FILTER_FORMAT="${MERMAID_FILTER_FORMAT:-pdf}" # vector, for LaTeX
   elif [[ "$NO_MERMAID" -eq 1 ]]; then
     printf 'md2pdf: warning: mermaid-filter not found; diagrams will render as literal source\n' >&2
   else

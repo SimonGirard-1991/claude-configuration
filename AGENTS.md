@@ -41,6 +41,14 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **Hooks and MCP wrappers are carved out of `shell.md`'s shebang and strict mode**
+  (2026-09-27). The eight bash hooks and both MCP wrappers in `~/bin` use `#!/bin/bash`
+  without `set -euo pipefail`, which broke two of the rule's four hard rules. Rewriting
+  them was rejected. A hook's exit code is its interface: Claude Code reads 0 as pass, 2
+  as block and anything else as an error. Under `set -e`, a failing command's own status
+  would become the hook's, so a stray 2 would block by accident. The fixed interpreter
+  matches the Python hooks' `/usr/bin/python3` pin. shellcheck and shfmt still apply, and
+  the four files that failed shfmt now pass it.
 - **SubagentStop validates only the agents that can edit** (2026-09-27). The 09-24
   denylist skipped `code-reviewer`, `Explore` and `Plan` and checked every other agent
   type by default. That included `claude-code-guide`, which only answers questions and

@@ -44,7 +44,10 @@ LINTER="${CLAUDE_SKILL_LINTER:-$ROOT/scripts/lint_skills.py}"
 PY="$CLAUDE_PYTHON"
 if [ -z "$PY" ]; then
   for cand in /usr/bin/python3 /opt/homebrew/bin/python3 /usr/local/bin/python3; do
-    [ -x "$cand" ] && { PY="$cand"; break; }
+    [ -x "$cand" ] && {
+      PY="$cand"
+      break
+    }
   done
 fi
 [ -n "$PY" ] || PY=$(command -v python3 2>/dev/null)
@@ -99,7 +102,7 @@ findings=""
 broke=""
 for scope in "${scopes[@]}"; do
   out=$("$PY" "$LINTER" --skills-dir "$SKDIR" --agents-dir "$AGDIR" \
-        --scope "$scope" ${transient[@]+"${transient[@]}"} --quiet 2>&1)
+    --scope "$scope" ${transient[@]+"${transient[@]}"} --quiet 2>&1)
   case "$?" in
     0) ;;
     3) findings="${findings}${out}"$'\n' ;;

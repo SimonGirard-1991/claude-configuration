@@ -21,8 +21,11 @@ root=$(cd "$cwd" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null) || ex
 
 has_cfg=""
 for c in .prettierrc .prettierrc.json .prettierrc.js .prettierrc.cjs .prettierrc.mjs \
-         .prettierrc.yml .prettierrc.yaml prettier.config.js prettier.config.cjs prettier.config.mjs; do
-  if [ -f "$root/$c" ]; then has_cfg=1; break; fi
+  .prettierrc.yml .prettierrc.yaml prettier.config.js prettier.config.cjs prettier.config.mjs; do
+  if [ -f "$root/$c" ]; then
+    has_cfg=1
+    break
+  fi
 done
 if [ -z "$has_cfg" ] && [ -f "$root/package.json" ]; then
   /usr/bin/jq -e '.prettier' "$root/package.json" >/dev/null 2>&1 && has_cfg=1
@@ -41,8 +44,8 @@ while IFS= read -r -d '' rec; do
   esac
   [ -f "$f" ] || continue
   case "$f" in
-    */node_modules/*|*package-lock.json|*pnpm-lock.yaml|*yarn.lock) continue ;;
-    *.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs|*.css|*.scss|*.json|*.md|*.html|*.yml|*.yaml) files+=("$f") ;;
+    */node_modules/* | *package-lock.json | *pnpm-lock.yaml | *yarn.lock) continue ;;
+    *.ts | *.tsx | *.js | *.jsx | *.mjs | *.cjs | *.css | *.scss | *.json | *.md | *.html | *.yml | *.yaml) files+=("$f") ;;
   esac
 done < <(git -C "$root" status --porcelain -z --untracked-files=all 2>/dev/null)
 

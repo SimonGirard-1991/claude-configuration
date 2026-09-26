@@ -24,6 +24,10 @@ flags is not a script — give the command instead.
   source or argv (argv is visible in `ps`). Parameters with env-var defaults
   (`"${DOTFILES_DIR:-$HOME/dotfiles}"`), XDG conventions, Keychain for secrets.
 
+**Hooks and MCP wrappers** pin `#!/bin/bash`, as the Python hooks pin `/usr/bin/python3`,
+and map each failure to an explicit exit code instead of `set -euo pipefail`: Claude Code
+reads 0 as pass, 2 as block, anything else as an error. Every other rule still applies.
+
 ## Portability
 macOS `/bin/bash` is 3.2: no `mapfile`, no associative arrays, no `${var^^}`. Write to
 that floor unless the target is known to be Linux, where bash 4+/5 idioms are fair game.

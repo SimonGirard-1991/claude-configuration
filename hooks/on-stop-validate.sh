@@ -47,12 +47,15 @@ errs=""
 broke=""
 
 run() { # $1 hook script, rest: paths
-  local hook="$ROOT/hooks/$1"; shift
+  local hook="$ROOT/hooks/$1"
+  shift
   [ -x "$hook" ] || {
     broke="${broke}on-stop-validate: hooks/$(basename "$hook") missing or not executable; that check is OFF"$'\n'
     return
   }
-  local out; out=$("$hook" "$@" 2>&1); local st=$?
+  local out
+  out=$("$hook" "$@" 2>&1)
+  local st=$?
   case "$st" in
     0) ;;
     2) errs="${errs}${out}"$'\n' ;;
