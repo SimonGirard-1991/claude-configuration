@@ -41,6 +41,15 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **SubagentStop validates only the agents that can edit** (2026-09-27). The 09-24
+  denylist skipped `code-reviewer`, `Explore` and `Plan` and checked every other agent
+  type by default. That included `claude-code-guide`, which only answers questions and
+  could be blocked by drift it cannot fix. Under the sandbox, no subagent can fix
+  `skills/`, `rules/` or `hooks/` through Bash either. The matcher is now an allowlist:
+  `general-purpose`, `claude`, `learning-doc-writer` and `statusline-setup`. An editing
+  agent missing from the list, a fork for instance, still does not escape the check,
+  because the main session's Stop hook runs the same validators at the end of the turn.
+  When a new agent that can edit is added, add it to the matcher too.
 - **Secret environment variables are named in managed settings, not here** (2026-09-26).
   The sandbox strips a variable only when `sandbox.credentials.envVars` names it, and a
   token's name can name its project, which in this public repo can be a client's. The two

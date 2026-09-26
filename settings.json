@@ -132,7 +132,7 @@
     ],
     "SubagentStop": [
       {
-        "matcher": "^(?!code-reviewer$|Explore$|Plan$).+",
+        "matcher": "^(general-purpose|claude|learning-doc-writer|statusline-setup)$",
         "hooks": [
           {
             "type": "command",
