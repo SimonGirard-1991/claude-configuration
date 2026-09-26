@@ -41,14 +41,23 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
-- **Hooks and MCP wrappers are carved out of `shell.md`'s shebang and strict mode**
-  (2026-09-27). The eight bash hooks and both MCP wrappers in `~/bin` use `#!/bin/bash`
-  without `set -euo pipefail`, which broke two of the rule's four hard rules. Rewriting
-  them was rejected. A hook's exit code is its interface: Claude Code reads 0 as pass, 2
-  as block and anything else as an error. Under `set -e`, a failing command's own status
-  would become the hook's, so a stray 2 would block by accident. The fixed interpreter
-  matches the Python hooks' `/usr/bin/python3` pin. shellcheck and shfmt still apply, and
-  the four files that failed shfmt now pass it.
+- **Claude Code hooks are carved out of `shell.md`'s shebang, strict mode, `--help` and
+  `--dry-run`** (2026-09-27). The eight bash hooks pin `#!/bin/bash` without
+  `set -euo pipefail`. That broke both halves of the rule's first hard rule, and none of
+  them has `--help` or `--dry-run`. Rewriting them was rejected. A hook's exit code is
+  its interface: 0 passes, 2 blocks, and anything else does not block, so a crashing
+  guard fails open. Under `set -e`, a failing command's own status would become the
+  hook's, and a stray 2 would block by accident. For the same reason, the rule's "2 means
+  a usage error" never applies to a hook. The two MCP wrappers in `~/bin` already keep
+  strict mode, which stops a failed Keychain read from starting a server with an empty
+  key. They are exempt from the shebang clause only. shellcheck and shfmt still apply.
+  Three hooks and `md2pdf.sh` failed shfmt, and all four now pass it.
+- **`format-on-stop.sh` keeps formatting the whole changed set** (2026-09-27). It formats
+  everything `git status` lists, so uncommitted edits the turn never touched get
+  formatted too. A per-turn snapshot, which would record blob hashes at UserPromptSubmit
+  and format only what changed, was not built. It would add a hook and per-session state
+  to one that never blocks and runs only in repos with a prettier config, and the
+  behaviour is now documented in README instead.
 - **SubagentStop validates only the agents that can edit** (2026-09-27). The 09-24
   denylist skipped `code-reviewer`, `Explore` and `Plan` and checked every other agent
   type by default. That included `claude-code-guide`, which only answers questions and
