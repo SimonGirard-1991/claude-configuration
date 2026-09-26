@@ -290,6 +290,10 @@ def run() -> None:
          "# A\n\n## Contents  \n\n- One\n\n## One\n\n" + filler, "forbid"),
         ("contents buried under a 60-line intro",
          "# A\n\n" + "intro\n" * 60 + "\n## Contents\n\n- One\n\n## One\n\n" + filler, "expect"),
+        ("contents heading on line 50",
+         "# A\n\n" + "intro\n" * 46 + "\n## Contents\n\n- One\n\n## One\n\n" + filler, "forbid"),
+        ("contents heading on line 51",
+         "# A\n\n" + "intro\n" * 47 + "\n## Contents\n\n- One\n\n## One\n\n" + filler, "expect"),
     ]
     for label, body, mode in cases:
         t = fresh()
@@ -326,6 +330,12 @@ def run() -> None:
         else:
             check(f"contents drift: {label}", codes_for(t), forbid="REF_TOC_DRIFT")
         shutil.rmtree(t)
+
+    t = fresh()
+    build(t, "a", "See `references/alpha.md`.\n",
+          {"alpha.md": "# A\n\n## Contents\n\n- One\n\n## One\n\ntext\n\n## Two\n\ntext\n"})
+    check("a short reference's stale list still drifts", codes_for(t), expect="REF_TOC_DRIFT")
+    shutil.rmtree(t)
 
     t = fresh()
     build(t, "a", "See `references/alpha.md`.\n",

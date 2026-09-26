@@ -341,7 +341,8 @@ def check_reference_contents(ref: Path, lines: list[str], rep: Report) -> None:
             f"not a section {extra}" if extra else "",
         ])) or "order differs from the sections"
         rep.err(ref, start, "REF_TOC_DRIFT",
-                f"contents list does not match the H2s after it: {detail}")
+                f"contents list does not match the H2s after it: {detail} (entries are "
+                "`- <H2 text>` lines at column 0, in the sections' order)")
 
 
 def check_skill_names(path: Path, body: str, known: set[str], rep: Report) -> None:
