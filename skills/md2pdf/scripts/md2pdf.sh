@@ -60,15 +60,20 @@ die() {
   exit 1
 }
 
+usage_error() {
+  printf 'md2pdf: error: %s\n' "$*" >&2
+  exit 2
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -s | --style)
-      [[ $# -ge 2 ]] || die "$1 requires a value"
+      [[ $# -ge 2 ]] || usage_error "$1 requires a value"
       STYLE="$2"
       shift 2
       ;;
     -e | --engine)
-      [[ $# -ge 2 ]] || die "$1 requires a value"
+      [[ $# -ge 2 ]] || usage_error "$1 requires a value"
       ENGINE="$2"
       shift 2
       ;;
@@ -90,7 +95,7 @@ while [[ $# -gt 0 ]]; do
       break
       ;;
     -*)
-      die "unknown option: $1 (see --help)"
+      usage_error "unknown option: $1 (see --help)"
       ;;
     *)
       if [[ -z "$INPUT" ]]; then
@@ -98,7 +103,7 @@ while [[ $# -gt 0 ]]; do
       elif [[ -z "$OUTPUT" ]]; then
         OUTPUT="$1"
       else
-        die "unexpected argument: $1"
+        usage_error "unexpected argument: $1"
       fi
       shift
       ;;
@@ -107,7 +112,7 @@ done
 
 [[ -n "$INPUT" ]] || {
   usage >&2
-  exit 1
+  exit 2
 }
 [[ -f "$INPUT" ]] || die "input file not found: $INPUT"
 [[ -n "$OUTPUT" ]] || OUTPUT="${INPUT%.*}.pdf"
