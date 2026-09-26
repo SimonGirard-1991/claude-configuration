@@ -76,7 +76,7 @@ into its companion quiz (see "Pairing with learning-doc-writer" below).
 
 6. **Build it:**
    ```bash
-   python3 ~/.claude/skills/quiz/scripts/build_quiz.py <out>/data/<slug>.json --out <out>
+   python3 ${CLAUDE_SKILL_DIR}/scripts/build_quiz.py <out>/data/<slug>.json --out <out>
    ```
    The builder auto-finds its bundled template, validates (exactly one correct option
    per MCQ, no empty fields, safe slug), and checks for length bias. If it errors, fix

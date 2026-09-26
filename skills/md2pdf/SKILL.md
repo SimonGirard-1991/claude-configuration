@@ -13,7 +13,7 @@ description: >-
 One command, no improvisation:
 
 ```bash
-~/.claude/skills/md2pdf/scripts/md2pdf.sh <input.md> [output.pdf]
+${CLAUDE_SKILL_DIR}/scripts/md2pdf.sh <input.md> [output.pdf]
 ```
 
 The script is the single source of truth for the build. It:
