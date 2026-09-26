@@ -116,7 +116,7 @@ done
 }
 [[ -f "$INPUT" ]] || die "input file not found: $INPUT"
 [[ -n "$OUTPUT" ]] || OUTPUT="${INPUT%.*}.pdf"
-[[ "$OUTPUT" != "$INPUT" ]] || die "output would overwrite input: $INPUT"
+[[ "$OUTPUT" != "$INPUT" ]] || usage_error "output would overwrite input: $INPUT"
 [[ -d "$(dirname "$OUTPUT")" ]] || die "output directory does not exist: $(dirname "$OUTPUT")"
 
 command -v pandoc >/dev/null 2>&1 ||
