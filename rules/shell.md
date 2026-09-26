@@ -26,8 +26,8 @@ flags is not a script — give the command instead.
 
 **Claude Code hooks** pin `#!/bin/bash` (Python hooks: `/usr/bin/python3`) and map each
 failure to an explicit exit code instead of `set -euo pipefail`, because the exit code is
-the interface: 0 passes, 2 blocks, and anything else does not block, so a crashing guard
-fails open. In a hook, 2 never means a usage error. A hook has no `--help` or `--dry-run`;
+the interface: 0 passes, 2 blocks, and anything else does not block on its own, so a
+crashing guard fails open. In a hook, 2 never means a usage error. A hook has no `--help` or `--dry-run`;
 its fixture run is the execution before hand-back. MCP wrappers pin the shebang too but
 keep strict mode. The rest of this file applies.
 

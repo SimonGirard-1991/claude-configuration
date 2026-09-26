@@ -43,10 +43,10 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 - **Claude Code hooks are carved out of `shell.md`'s shebang, strict mode, `--help` and
   `--dry-run`** (2026-09-27). The eight bash hooks pin `#!/bin/bash` without
-  `set -euo pipefail`. That broke both halves of the rule's first hard rule, and none of
+  `set -euo pipefail`. That broke both halves of the rule's second hard rule, and none of
   them has `--help` or `--dry-run`. Rewriting them was rejected. A hook's exit code is
-  its interface: 0 passes, 2 blocks, and anything else does not block, so a crashing
-  guard fails open. Under `set -e`, a failing command's own status would become the
+  its interface: 0 passes, 2 blocks, and anything else does not block on its own, so a
+  crashing guard fails open. Under `set -e`, a failing command's own status would become the
   hook's, and a stray 2 would block by accident. For the same reason, the rule's "2 means
   a usage error" never applies to a hook. The two MCP wrappers in `~/bin` already keep
   strict mode, which stops a failed Keychain read from starting a server with an empty
