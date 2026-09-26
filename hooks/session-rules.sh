@@ -9,8 +9,9 @@
 # `paths:` as a fallback for repos this detector misses.
 #
 # Usage: session-rules.sh <java|frontend>. One rule per invocation, because every hook
-# output field is capped at 10,000 characters and frontend.md alone is ~9.2k; over the
-# cap Claude receives a file path and a 2,000-character preview instead of the rule.
+# output field is capped at 10,000 characters and the two rules together exceed it; over
+# the cap Claude receives a file path and a 2,000-character preview instead of the rule.
+# hooks/validate-rules.sh blocks a turn that pushes one rule past $CAP.
 #
 # Detection probes the session cwd and its git toplevel:
 #   java      pom.xml, build.gradle(.kts) or settings.gradle(.kts)

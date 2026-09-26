@@ -10,7 +10,7 @@ that fires on ordinary commands teaches the session to route around it.
 Hook paths come from environment overrides, so a candidate can be tested before it
 replaces the live file — a broken live guard gates the very session editing it:
 CLAUDE_BASH_GUARD, CLAUDE_REVIEWER_GUARD, CLAUDE_SESSION_RULES, CLAUDE_LOG_INSTRUCTIONS,
-CLAUDE_SONAR_GATE_HOOK, CLAUDE_SONAR_GATE, CLAUDE_VALIDATE_README.
+CLAUDE_SONAR_GATE_HOOK, CLAUDE_SONAR_GATE, CLAUDE_VALIDATE_README, CLAUDE_VALIDATE_RULES.
 
 Run: python3 scripts/test_hooks.py
 """
@@ -36,6 +36,8 @@ SONAR_HOOK = os.environ.get("CLAUDE_SONAR_GATE_HOOK",
 SONAR_GATE = os.environ.get("CLAUDE_SONAR_GATE", str(ROOT / "scripts" / "sonar-gate.sh"))
 VALIDATE_README = os.environ.get("CLAUDE_VALIDATE_README",
                                  str(ROOT / "hooks" / "validate-readme.sh"))
+VALIDATE_RULES = os.environ.get("CLAUDE_VALIDATE_RULES",
+                                str(ROOT / "hooks" / "validate-rules.sh"))
 HOOK_OUTPUT_CAP = 9800
 
 _passes = 0
@@ -760,6 +762,76 @@ def test_validate_readme() -> None:
     shutil.rmtree(fx)
 
 
+# ── validate-rules.sh ───────────────────────────────────────────────────────
+# The inflated rule runs first as the positive control: a validator that never reached its
+# oracle would pass every green case after it. The oracle is SESSION_RULES, so a candidate
+# session-rules.sh is exercised here too.
+def test_validate_rules() -> None:
+    fx = Path(tempfile.mkdtemp()).resolve()
+    config = fx / "config"
+    (config / "rules").mkdir(parents=True)
+    for rule in ("java.md", "frontend.md"):
+        shutil.copy(ROOT / "rules" / rule, config / "rules" / rule)
+    frontend, java = config / "rules" / "frontend.md", config / "rules" / "java.md"
+    scratch = fx / "tmp"
+    scratch.mkdir()
+    env = {**os.environ, "CLAUDE_CONFIG_DIR": str(config), "CLAUDE_SESSION_RULES": SESSION_RULES,
+           "TMPDIR": str(scratch)}
+    silent = fx / "silent-oracle.sh"
+    silent.write_text("#!/bin/bash\nexit 0\n")
+    reworded = fx / "reworded-oracle.sh"
+    oracle_src = Path(SESSION_RULES).read_text()
+    check("validate-rules: the reworded oracle really differs from the real one",
+          "exceeds" in oracle_src, "the notice no longer says 'exceeds'; update the mutant")
+    reworded.write_text(oracle_src.replace("exceeds", "is over"))
+    for stub in (silent, reworded):
+        stub.chmod(0o755)
+
+    def validate(*args: str, run_env: dict = env) -> subprocess.CompletedProcess:
+        return subprocess.run([VALIDATE_RULES, *args], capture_output=True, text=True,
+                              env=run_env, cwd=config, timeout=30, check=False)
+
+    def detail(proc: subprocess.CompletedProcess) -> str:
+        return f"exit {proc.returncode}, stderr {proc.stderr.strip()[:160]!r}"
+
+    live = frontend.read_text()
+    frontend.write_text(live + "\n" + "x" * 12000 + "\n")
+    proc = validate(str(frontend))
+    check("validate-rules: positive control, an inflated rule blocks and is named",
+          proc.returncode == 2 and "rules/frontend.md" in proc.stderr, detail(proc))
+    proc = validate("rules/frontend.md")
+    check("validate-rules: a relative path is checked", proc.returncode == 2, detail(proc))
+    proc = validate(str(frontend), run_env={**env, "CLAUDE_SESSION_RULES": str(reworded)})
+    check("validate-rules: an overflow blocks whatever the oracle's notice says",
+          proc.returncode == 2 and "rules/frontend.md" in proc.stderr, detail(proc))
+    frontend.write_text(live)
+    proc = validate(str(config / "hooks" / "session-rules.sh"),
+                    run_env={**env, "CLAUDE_SESSION_RULES": str(silent)})
+    check("validate-rules: a change to the oracle re-checks the rules",
+          proc.returncode == 1 and "java" in proc.stderr and "frontend" in proc.stderr,
+          detail(proc))
+
+    proc = validate(str(frontend), str(java))
+    check("validate-rules: the live rules pass", proc.returncode == 0 and not proc.stderr,
+          detail(proc))
+    proc = validate(str(config / "README.md"), "/etc/hosts", str(config / "rules" / "shell.md"),
+                    run_env={**env, "CLAUDE_SESSION_RULES": str(fx / "missing.sh")})
+    check("validate-rules: other paths pass without running the oracle",
+          proc.returncode == 0 and not proc.stderr, detail(proc))
+    proc = validate(str(frontend), run_env={**env, "CLAUDE_SESSION_RULES": str(fx / "missing.sh")})
+    check("validate-rules: a missing oracle turns the check OFF, loudly",
+          proc.returncode == 1 and "OFF" in proc.stderr, detail(proc))
+    proc = validate(str(frontend), run_env={**env, "CLAUDE_SESSION_RULES": str(silent)})
+    check("validate-rules: an oracle that injects nothing is reported, not passed",
+          proc.returncode == 1 and "no injection" in proc.stderr, detail(proc))
+    java.unlink()
+    proc = validate(str(java))
+    check("validate-rules: a deleted rule is not an overflow", proc.returncode == 0, detail(proc))
+    check("validate-rules: its fixture directories are removed", not any(scratch.iterdir()),
+          str(list(scratch.iterdir())))
+    shutil.rmtree(fx)
+
+
 def run() -> None:
     test_bash_guard()
     test_reviewer_guard()
@@ -767,6 +839,7 @@ def run() -> None:
     test_sonar_gate()
     test_sonar_gate_script()
     test_validate_readme()
+    test_validate_rules()
 
 
 if __name__ == "__main__":

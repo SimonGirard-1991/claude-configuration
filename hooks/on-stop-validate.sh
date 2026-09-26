@@ -62,6 +62,7 @@ run() { # $1 hook script, rest: paths
 
 run validate-skill-tree.sh "${changed[@]}"
 run validate-readme.sh "${changed[@]}"
+run validate-rules.sh "${changed[@]}"
 
 if [ -n "$broke" ]; then
   printf '%s' "$broke" >&2
