@@ -3,14 +3,18 @@
 # hooks/session-rules.sh to inline. Over the hook's cap a session gets a pointer instead
 # of the rule, and the only sign is a systemMessage in some later session.
 #
+# It also blocks when the two rules' "### Self-review loop" sections differ, or either is
+# missing. That text is shared: each copy runs from its heading to the end of its file, and
+# an edit that reaches only one copy is how the loop drifted before.
+#
 # The oracle is the real session-rules.sh, run against a throwaway repo fixture, rather
 # than a copy of its cap and header here, which could drift from the hook it guards. A
 # change to the oracle itself therefore re-checks both rules.
 #
 # Called by hooks/on-stop-validate.sh with the turn's changed paths; any other path is
 # ignored, and a relative one resolves against the working directory. Exit 2 when a rule
-# overflows. Exit 1 when the oracle gives no answer or warns, so the check is visibly OFF
-# rather than silently green.
+# overflows or the loops drift. Exit 1 when the oracle gives no answer or warns, so the
+# check is visibly OFF rather than silently green.
 #
 # CLAUDE_CONFIG_DIR / CLAUDE_SESSION_RULES override for testing.
 
@@ -43,18 +47,51 @@ for f in "$@"; do
 done
 [ "${#rules[@]}" -gt 0 ] || exit 0
 
-if [ ! -x "$ORACLE" ] || [ ! -x "$JQ" ]; then
-  printf 'validate-rules: %s or %s is missing or not executable; the rule-size check is OFF\n' \
-    "$ORACLE" "$JQ" >&2
+LOOP='### Self-review loop'
+loop_of() { awk -v h="$LOOP" 'f; $0 == h { f = 1 }' "$1"; }
+
+drift=""
+if [ -f "$ROOT/rules/java.md" ] && [ -f "$ROOT/rules/frontend.md" ]; then
+  java_loop=$(loop_of "$ROOT/rules/java.md")
+  frontend_loop=$(loop_of "$ROOT/rules/frontend.md")
+  case "$java_loop" in
+    *"Invocation: self-review loop"*) ;;
+    *) drift="${drift}rules/java.md has no '$LOOP' section at its end"$'\n' ;;
+  esac
+  case "$frontend_loop" in
+    *"Invocation: self-review loop"*) ;;
+    *) drift="${drift}rules/frontend.md has no '$LOOP' section at its end"$'\n' ;;
+  esac
+  if [ -z "$drift" ] && [ "$java_loop" != "$frontend_loop" ]; then
+    first=$(A="$java_loop" B="$frontend_loop" awk 'BEGIN {
+      n = split(ENVIRON["A"], a, "\n"); m = split(ENVIRON["B"], b, "\n")
+      for (i = 1; i <= (n > m ? n : m); i++)
+        if (a[i] != b[i]) { printf "java.md has \"%s\", frontend.md has \"%s\"", a[i], b[i]; exit }
+    }')
+    drift="the '$LOOP' sections of rules/java.md and rules/frontend.md differ: $first"$'\n'
+  fi
+fi
+if [ -n "$drift" ]; then
+  drift="${drift}Keep one text in both rules, last in each file; an edit to one copy goes to the other."$'\n'
+fi
+
+size_check_off() {
+  printf 'validate-rules: %s; the rule-size check is OFF\n' "$1" >&2
+  if [ -n "$drift" ]; then
+    printf '%s' "$drift" >&2
+    exit 2
+  fi
   exit 1
+}
+
+if [ ! -x "$ORACLE" ] || [ ! -x "$JQ" ]; then
+  size_check_off "$ORACLE or $JQ is missing or not executable"
 fi
 
 # Templated, because macOS mktemp ignores $TMPDIR and its default directory is closed under
 # the Bash sandbox.
-fx=$(mktemp -d "${TMPDIR:-/tmp}/validate-rules.XXXXXX") || {
-  printf 'validate-rules: cannot create a fixture directory; the rule-size check is OFF\n' >&2
-  exit 1
-}
+fx=$(mktemp -d "${TMPDIR:-/tmp}/validate-rules.XXXXXX") ||
+  size_check_off "cannot create a fixture directory"
 trap 'rm -rf "$fx"' EXIT
 mkdir "$fx/java" "$fx/frontend"
 : >"$fx/java/pom.xml"
@@ -83,10 +120,12 @@ for rule in "${rules[@]}"; do
 done
 
 [ -z "$broke" ] || printf '%s' "$broke" >&2
+[ -z "$drift" ] || printf '%s' "$drift" >&2
 if [ -n "$overflow" ]; then
   printf '%s' "$overflow" >&2
   printf 'Trim the rule until hooks/validate-rules.sh passes; a session in a matching repo would otherwise start without it.\n' >&2
   exit 2
 fi
+[ -z "$drift" ] || exit 2
 [ -z "$broke" ] || exit 1
 exit 0

@@ -794,11 +794,12 @@ def test_validate_rules() -> None:
     def detail(proc: subprocess.CompletedProcess) -> str:
         return f"exit {proc.returncode}, stderr {proc.stderr.strip()[:160]!r}"
 
-    live = frontend.read_text()
-    frontend.write_text(live + "\n" + "x" * 12000 + "\n")
+    live, java_live = frontend.read_text(), java.read_text()
+    loop_heading = "\n### Self-review loop\n"
+    frontend.write_text(live.replace(loop_heading, "\n" + "x" * 12000 + "\n" + loop_heading))
     proc = validate(str(frontend))
     check("validate-rules: positive control, an inflated rule blocks and is named",
-          proc.returncode == 2 and "rules/frontend.md" in proc.stderr, detail(proc))
+          proc.returncode == 2 and "rules/frontend.md is too big" in proc.stderr, detail(proc))
     proc = validate("rules/frontend.md")
     check("validate-rules: a relative path is checked", proc.returncode == 2, detail(proc))
     proc = validate(str(frontend), run_env={**env, "CLAUDE_SESSION_RULES": str(reworded)})
@@ -814,6 +815,29 @@ def test_validate_rules() -> None:
     proc = validate(str(frontend), str(java))
     check("validate-rules: the live rules pass", proc.returncode == 0 and not proc.stderr,
           detail(proc))
+
+    drifted = live.replace("adding nothing new.", "adding nothing.")
+    check("validate-rules: the drifted loop really differs from the live one", drifted != live,
+          "'adding nothing new.' is gone from the loop; update the mutant")
+    frontend.write_text(drifted)
+    proc = validate(str(frontend))
+    check("validate-rules: a loop edited in one rule only blocks, naming the difference",
+          proc.returncode == 2 and "differ" in proc.stderr and "adding nothing" in proc.stderr,
+          detail(proc))
+    proc = validate(str(frontend), run_env={**env, "CLAUDE_SESSION_RULES": str(fx / "missing.sh")})
+    check("validate-rules: loop drift still blocks when the size check is OFF",
+          proc.returncode == 2 and "OFF" in proc.stderr and "differ" in proc.stderr, detail(proc))
+    proc = validate(str(frontend), run_env={**env, "TMPDIR": str(fx / "no-such-dir")})
+    check("validate-rules: loop drift still blocks when no fixture directory can be made",
+          proc.returncode == 2 and "OFF" in proc.stderr and "differ" in proc.stderr, detail(proc))
+    frontend.write_text(live.replace(loop_heading, "\n### Review loop\n"))
+    java.write_text(java_live.replace(loop_heading, "\n### Review loop\n"))
+    proc = validate(str(frontend))
+    check("validate-rules: a loop missing from both rules blocks rather than passing as equal",
+          proc.returncode == 2 and "rules/java.md has no" in proc.stderr
+          and "rules/frontend.md has no" in proc.stderr, detail(proc))
+    frontend.write_text(live)
+    java.write_text(java_live)
     proc = validate(str(config / "README.md"), "/etc/hosts", str(config / "rules" / "shell.md"),
                     run_env={**env, "CLAUDE_SESSION_RULES": str(fx / "missing.sh")})
     check("validate-rules: other paths pass without running the oracle",

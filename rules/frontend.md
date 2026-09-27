@@ -147,10 +147,18 @@ post-mortems and cross-library comparisons.
 
 ## Verification after non-trivial changes
 1. Typecheck, lint, and run the targeted tests.
-2. Spawn `code-reviewer` with: what changed and why, the calibration tier
-   (throwaway / internal tool / production service / critical financial system), the scope
-   (paths or git range), the note that this is a **frontend diff** so it applies its
-   frontend lens, and the line `Invocation: self-review loop, iteration N of 3`.
-   Address 🔴 and 🟡; judge 🔵 on merit; cap at 3 iterations, then escalate with what is
-   outstanding.
+2. Run the self-review loop below, telling `code-reviewer` this is a **frontend diff** so
+   it applies its frontend lens.
+
+### Self-review loop
+
+Spawn `code-reviewer` with: what changed and why, the calibration tier
+(throwaway / internal tool / production service / critical financial system), the scope
+(paths or git range), and the line `Invocation: self-review loop, iteration N of 3`.
+Address 🔴 and 🟡; judge 🔵 on merit; cap at 3 iterations, then escalate to the user with
+what is outstanding. A verdict covers only the diff it saw: every edit after a review goes
+back through the reviewer within the cap, a 🔴 fix without exception; past the cap, hand
+the fix to the user marked unreviewed. The loop adds no quality of its own: submit correct
+code first, and mid-loop fix only the accepted findings, adding nothing new.
+
 Relay any **Proposed memory** note verbatim; record it only on user approval.

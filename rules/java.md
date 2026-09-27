@@ -115,17 +115,7 @@ shipped by a review that reported clean.
    only that text matches its sandbox exclusion, and sandboxed, Maven, the scanner and
    docker all fail. Fix or justify every finding on the same line, and list every
    suppression in the hand-back.
-3. Spawn `code-reviewer` with: what changed and why, the calibration tier
-   (throwaway / internal tool / production service / critical financial system), the
-   scope (paths or git range), and the line
-   `Invocation: self-review loop, iteration N of 3`. Address 🔴 and 🟡; judge 🔵 on
-   merit; cap at 3 iterations, then escalate to the user with what is outstanding.
-   A verdict covers only the diff it saw: every edit after a review goes back through the
-   reviewer within the cap, a 🔴 fix without exception; past the cap, hand the fix to the
-   user marked unreviewed. The loop adds no quality of its
-   own: submit correct code first, and mid-loop fix only the accepted findings, adding
-   nothing new.
-Relay any **Proposed memory** note verbatim; record it only on user approval.
+3. Run the self-review loop below.
 
 Evidence has to reach the end of the chain. A change spanning systems is verified at
 the far end — the consumer, the dashboard, the read model — not at the first hop. A
@@ -133,3 +123,16 @@ claim that a tool enforces, covers or proves something needs a command that show
 a green gate proves nothing until you can say what it measured. A bare `plugin:goal`
 such as `pitest:mutationCoverage` runs no earlier phase and re-reports stale classes, so
 a number that did not move after a change is suspect, not confirmation.
+
+### Self-review loop
+
+Spawn `code-reviewer` with: what changed and why, the calibration tier
+(throwaway / internal tool / production service / critical financial system), the scope
+(paths or git range), and the line `Invocation: self-review loop, iteration N of 3`.
+Address 🔴 and 🟡; judge 🔵 on merit; cap at 3 iterations, then escalate to the user with
+what is outstanding. A verdict covers only the diff it saw: every edit after a review goes
+back through the reviewer within the cap, a 🔴 fix without exception; past the cap, hand
+the fix to the user marked unreviewed. The loop adds no quality of its own: submit correct
+code first, and mid-loop fix only the accepted findings, adding nothing new.
+
+Relay any **Proposed memory** note verbatim; record it only on user approval.
