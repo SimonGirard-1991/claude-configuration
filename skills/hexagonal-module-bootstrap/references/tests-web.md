@@ -29,10 +29,10 @@ import com.company.ecom.order.infrastructure.web.mapper.*;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.UUID;
@@ -48,8 +48,8 @@ class OrderControllerTest {
 
   @Autowired MockMvc mvc;
 
-  @MockBean PlaceOrderService placeOrderService;
-  @MockBean OrderReadService orderReadService;
+  @MockitoBean PlaceOrderService placeOrderService;
+  @MockitoBean OrderReadService orderReadService;
 
   @Test
   void POST_v1_orders_returns_201_with_location() throws Exception {
@@ -208,6 +208,7 @@ void OrderAlreadyShipped_maps_to_409() throws Exception {
 
 ## Variants
 
+- **Spring Boot 3.4–3.5**: `@MockitoBean` is unchanged (Spring Framework 6.2+), but `@WebMvcTest` comes from `org.springframework.boot.test.autoconfigure.web.servlet`. Below 3.4, use `@MockBean` from `org.springframework.boot.test.mock.mockito`; 3.4 deprecated it and 4.0 removed it.
 - **Quarkus**: `@QuarkusTest` + REST Assured. No slice-test equivalent — Quarkus tests are faster overall so the granularity loss is acceptable.
 - **Micronaut**: `@MicronautTest` + the built-in HTTP client.
 
@@ -215,5 +216,6 @@ void OrderAlreadyShipped_maps_to_409() throws Exception {
 
 - **Validation tests belong here**, not in domain tests. `@NotNull` / `@Min` / `@Pattern` on generated DTOs are transport concerns, not invariants.
 - **Never call the real service**. The point of a slice test is isolation.
+- **Spring Boot 4 splits the web slice into its own module**: add `spring-boot-starter-webmvc-test` in test scope, or the `@WebMvcTest` import does not resolve.
 - **Include the mappers in the slice** via `@Import`, otherwise `MockMvc` can't resolve them.
 - **Routes carry the `/v1` prefix** because the spec declares `servers: - url: /v1`. Tests assert on the full `/v1/orders` path to match what the generated interface wires up; if you assert on `/orders` the test passes under a bare controller but breaks the day someone reviews the contract.
