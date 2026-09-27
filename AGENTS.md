@@ -9,7 +9,7 @@ working on this config needs.
 
 | Agent | Role | Invoked by |
 |---|---|---|
-| `code-reviewer` | Staff-level review of a diff: design, correctness, operability, code-level. Severity-tagged 🔴/🟡/🔵, verdict ✅/⚠️/🔴. | The user directly, or a session running the self-review loop in `rules/java.md`. |
+| `code-reviewer` | Staff-level review of a diff: design, correctness, operability, code-level. Severity-tagged 🔴/🟡/🔵, verdict ✅/⚠️/🔴. | The user directly, or a session running the self-review loop in `rules/java.md` or `rules/frontend.md`. |
 | `learning-doc-writer` | Pandoc-ready learning documents, with a mandatory independent adversarial review before hand-back. | The user directly, or auto-routed on its description. |
 
 Both are `model: inherit`. The one deliberate exception is inside
@@ -41,6 +41,27 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **The self-review loop is one text in two rules, and the reviewer reads the frontend
+  checklist rather than copying it** (2026-09-27). The loop had drifted: `java.md` gained
+  the re-review-after-edit rule and "the loop adds no quality of its own", and
+  `frontend.md` never did. Both rules now end with the same `### Self-review loop`
+  section, and `hooks/validate-rules.sh` blocks a Stop that leaves the two different or
+  either missing. The check sits at Stop because the session that edits one copy has no
+  reason to run the test suite; `scripts/test_hooks.py` pins it. The reviewer's frontend
+  lens had carried a copy of the WCAG 2.2 AA checklist; it now reads `frontend.md` and
+  keeps only the severity. One shared loop file was rejected: the `paths:` fallback load
+  would deliver the rules without it, and `session-rules.sh` would have to append a second
+  file to each injection. The section is about 760 characters, and `frontend.md` has
+  about 360 left under the injection cap.
+- **Agent prompts give reasons, not emphasis** (2026-09-27). "MUST", "non-negotiable" and
+  "hard requirement" came out of both agent files wherever the reason already stood beside
+  them: recent models follow a system prompt closely, and emphasis makes them over-apply a
+  rule. Both agents run as subagents and cannot ask the user mid-run, so each "ask" or
+  "confirm" became something a subagent can do: return the question to the caller, name
+  the assumption in the review, or state the tradeoff in the final message. The PDF build
+  changed in substance, not only in tone: it waited for an agreement that could never
+  arrive mid-run, and now runs when the request asks for the PDF. The reviewer keeps its
+  Staff-engineer role, since Anthropic's prompting guidance recommends one.
 - **Claude Code hooks are carved out of `shell.md`'s shebang, strict mode, `--help` and
   `--dry-run`** (2026-09-27). The eight bash hooks pin `#!/bin/bash` without
   `set -euo pipefail`. That broke both halves of the rule's second hard rule, and none of
