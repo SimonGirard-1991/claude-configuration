@@ -45,11 +45,10 @@ import com.company.ecom.order.application.port.OrderEventOutbox;
 import com.company.ecom.order.domain.event.OrderEvent;
 import com.company.ecom.order.infrastructure.messaging.producer.mapper.OrderIntegrationEventMapper;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jooq.DSLContext;
 import org.jooq.JSONB;
 import org.springframework.stereotype.Component;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.util.UUID;
 
@@ -60,12 +59,12 @@ public class JdbcOrderEventOutbox implements OrderEventOutbox {
 
   private final DSLContext dsl;
   private final OrderIntegrationEventMapper mapper;
-  private final ObjectMapper objectMapper;
+  private final JsonMapper jsonMapper;
 
-  public JdbcOrderEventOutbox(DSLContext dsl, OrderIntegrationEventMapper mapper, ObjectMapper objectMapper) {
+  public JdbcOrderEventOutbox(DSLContext dsl, OrderIntegrationEventMapper mapper, JsonMapper jsonMapper) {
     this.dsl = dsl;
     this.mapper = mapper;
-    this.objectMapper = objectMapper;
+    this.jsonMapper = jsonMapper;
   }
 
   @Override
@@ -73,22 +72,16 @@ public class JdbcOrderEventOutbox implements OrderEventOutbox {
     dsl.insertInto(ORDER_EVENT_OUTBOX)
         .set(ORDER_EVENT_OUTBOX.ID, UUID.randomUUID())
         .set(ORDER_EVENT_OUTBOX.AGGREGATE_ID, event.orderId().value())
-        .set(ORDER_EVENT_OUTBOX.PAYLOAD, JSONB.valueOf(toJson(mapper.toIntegration(event))))
+        .set(ORDER_EVENT_OUTBOX.PAYLOAD, JSONB.valueOf(jsonMapper.writeValueAsString(mapper.toIntegration(event))))
         .set(ORDER_EVENT_OUTBOX.OCCURRED_AT, event.occurredAt())
         .execute();
-  }
-
-  private String toJson(Object payload) {
-    try {
-      return objectMapper.writeValueAsString(payload);
-    } catch (JsonProcessingException e) {
-      throw new IllegalStateException("cannot serialize integration event: " + payload.getClass(), e);
-    }
   }
 }
 ```
 
 `record` is called *inside* the application-service transaction, which is the whole point: the outbox row commits atomically with the aggregate save.
+
+Spring Boot 4 auto-configures a Jackson 3 `JsonMapper`, and Jackson 3 exceptions are unchecked, so a payload that cannot be serialized throws inside that transaction and rolls the aggregate save back with it — no wrapper needed. On Boot 3, inject Jackson 2's `ObjectMapper` instead and wrap its checked `JsonProcessingException` in an unchecked exception, so the rollback still happens.
 
 ### Kafka relay
 

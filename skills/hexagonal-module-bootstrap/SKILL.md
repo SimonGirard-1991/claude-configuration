@@ -9,7 +9,7 @@ Code-ready templates for scaffolding hexagonal + DDD modules in Java. Pair with 
 
 **Example domain**: e-commerce `Order`. Replace names when adapting.
 
-**Default stack**: Java 21, Spring Boot 3+, jOOQ, PostgreSQL, Kafka. Variants for Quarkus, Micronaut, and plain Java are called out where they differ.
+**Default stack**: JDK 25 (LTS), Spring Boot 4, jOOQ, PostgreSQL, Kafka. Variants for Spring Boot 3.x, Quarkus, Micronaut, and plain Java are called out where they differ.
 
 ## How to use this skill
 
@@ -51,7 +51,7 @@ Build inward-out. This keeps the domain pure and surfaces port-design questions 
 
 - **Rename everything**. Don't ship `Order` in your codebase unless your domain actually has orders.
 - **Prune aggressively**. A template shows what's possible; your aggregate should only contain what you need. Fewer fields, fewer methods, fewer invariants = better.
-- **Pick the right framework variant** for the target project. Default is Spring Boot 3+.
+- **Pick the right framework variant** for the target project. Default is Spring Boot 4.
 - **jOOQ is the default persistence** in these templates. JPA is a valid alternative when its trade-offs are understood — see `db-adapter-jpa.md` for the criteria.
 - **The code blocks are comment-free on purpose — keep them that way.** Every rule, trade-off and gotcha lives in the prose around the block, never inside it, so that what you copy is what ships. Do not re-inject that prose as comments when you paste: a template's explanation is written for someone deciding *whether* to use the pattern, and it is noise to the next person reading the code that resulted. Comment only what your own code cannot say — see the comment doctrine your agent carries.
 - **Contract-first for all external APIs**. REST uses OpenAPI YAML; Kafka integration events use Avro/Protobuf + Schema Registry; gRPC uses `.proto` natively. Generated types are infrastructure — never import from `application/` or `domain/`. Code-first REST is not the default.

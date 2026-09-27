@@ -71,7 +71,8 @@ class HexagonalLayersTest {
             "jakarta.ws.rs..",
             "org.jooq..",
             "org.apache.kafka..",
-            "com.fasterxml.jackson..")
+            "com.fasterxml.jackson..",
+            "tools.jackson..")
         .check(APP);
   }
 

@@ -190,7 +190,8 @@ Maven example — Gradle equivalent is trivial.
           <!-- Non-negotiable options. Deviating from these is how contract-first rots. -->
           <interfaceOnly>true</interfaceOnly>
           <skipDefaultInterface>true</skipDefaultInterface>
-          <useSpringBoot3>true</useSpringBoot3>
+          <useSpringBoot4>true</useSpringBoot4>
+          <useJackson3>true</useJackson3>
           <useJakartaEe>true</useJakartaEe>
           <useTags>true</useTags>
           <openApiNullable>false</openApiNullable>
@@ -207,6 +208,7 @@ Maven example — Gradle equivalent is trivial.
 - `interfaceOnly=true` — you do NOT want a generated `@RestController`. You want an interface with the route/validation annotations, which your controller implements. A generated controller ties you to the generator's DI assumptions and removes your exception-handling seam.
 - `skipDefaultInterface=true` — forces you to implement every operation. If the YAML grows a new operation, the build fails until you add a handler. This is the point.
 - `useTags=true` — one interface per tag (`orders` → `OrderApi`). Scales better than a single mega-interface when the spec grows.
+- `useSpringBoot4` + `useJackson3` — generate for Boot 4 and its Jackson 3 baseline. Both options need OpenAPI Generator 7.16.0 or later, and the generator allows `useJackson3` only with `useSpringBoot4`. On Boot 3.x, set `useSpringBoot3` instead and drop `useJackson3`.
 
 Generated sources are **not committed**. Codegen runs at `generate-sources`. IDEs pick up the target directory via the Maven build-helper plugin or Gradle's source set auto-detection.
 
