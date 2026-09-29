@@ -57,7 +57,7 @@ def run_hook(hook, payload, env: dict | None = None,
     argv = [hook] if isinstance(hook, str) else list(hook)
     data = payload if isinstance(payload, str) else json.dumps(payload)
     return subprocess.run(argv, input=data, capture_output=True, text=True,
-                          timeout=30, env=env, cwd=cwd, check=False)
+                          errors="surrogateescape", timeout=30, env=env, cwd=cwd, check=False)
 
 
 def decision(proc: subprocess.CompletedProcess) -> str:
@@ -492,6 +492,16 @@ def test_sonar_gate() -> None:
     def calls() -> list[list[str]]:
         return [line.split() for line in log.read_text().splitlines()] if log.exists() else []
 
+    # A hook that exits 0 reaches the user only through a systemMessage on stdout; its stderr
+    # goes to the debug log.
+    def shown(proc: subprocess.CompletedProcess) -> str:
+        if not proc.stdout.strip():
+            return ""
+        try:
+            return json.loads(proc.stdout)["systemMessage"]
+        except (ValueError, KeyError):
+            return f"<stdout is not a systemMessage: {proc.stdout[:80]!r}>"
+
     def rescanned(name: str, before: int, want: int = 1) -> None:
         check(f"sonar-gate: {name}", len(calls()) == before + want,
               f"{len(calls()) - before} new calls, expected {want}")
@@ -567,9 +577,13 @@ def test_sonar_gate() -> None:
     before = len(calls())
     first, second = stop(repo), stop(repo)
     rescanned("a justified suppression scans once", before)
-    check("sonar-gate: a skipped Stop still reports justified suppressions",
-          "report these" in first.stderr and "report these" in second.stderr,
-          repr(second.stderr[:160]))
+    check("sonar-gate: a justified suppression is shown to the user once, with file and line",
+          f"{app}:1: class App" in shown(first) and shown(second) == "",
+          repr((first.stdout[:160], second.stdout[:160])))
+    put(repo / new, "class New { int t; } // NOSONAR: second reason\n")
+    third = shown(stop(repo))
+    check("sonar-gate: a suppression added to the set shows the whole set again",
+          f"{app}:1:" in third and f"{new}:1:" in third, repr(third[:200]))
 
     silent = fx / "silent-diff.sh"
     silent.write_text("#!/bin/bash\n")
@@ -612,9 +626,218 @@ def test_sonar_gate() -> None:
     (repo / ".sonar-gate").unlink()
     put(repo / app, "class App { int inert; }\n")
     before = len(calls())
-    code = stop(repo).returncode
-    check("sonar-gate: inert without .sonar-gate", code == 0 and len(calls()) == before,
-          f"exit {code}, {len(calls()) - before} new calls")
+    proc = stop(repo)
+    check("sonar-gate: a deleted .sonar-gate the base still has scans nothing and tells the user",
+          proc.returncode == 0 and len(calls()) == before and "OFF" in shown(proc),
+          f"exit {proc.returncode}, {len(calls()) - before} new calls, stdout {proc.stdout!r}")
+
+    repo = new_repo("never-gated", "main")
+    git(repo, "rm", "-q", ".sonar-gate")
+    git(repo, "commit", "-q", "-m", "no gate")
+    put(repo / app, "class App { int quiet; }\n")
+    before = len(calls())
+    proc = stop(repo)
+    check("sonar-gate: silent and inert where the base has no .sonar-gate",
+          proc.returncode == 0 and len(calls()) == before and proc.stdout == "",
+          f"exit {proc.returncode}, {len(calls()) - before} new calls, stdout {proc.stdout!r}")
+
+    # A Sonar property that excludes, skips or narrows analysis hides findings the way NOSONAR
+    # does. No java file changes in the table, so nothing is scanned: the audit runs anyway.
+    repo = new_repo("pom-audit", "main")
+
+    def pom(body: str) -> str:
+        return f"<project>\n  <properties>\n{body}  </properties>\n</project>\n"
+
+    def reset(repo: Path) -> None:
+        git(repo, "checkout", "-q", "--", ".")
+        git(repo, "clean", "-fdq")
+
+    multicriteria = (
+        "    <!-- Module declarations sit alone in their package. -->\n"
+        "    <sonar.issue.ignore.multicriteria>e1</sonar.issue.ignore.multicriteria>\n"
+        "    <sonar.issue.ignore.multicriteria.e1.ruleKey>java:S4032"
+        "</sonar.issue.ignore.multicriteria.e1.ruleKey>\n"
+        "    <sonar.issue.ignore.multicriteria.e1.resourceKey>**/package-info.java"
+        "</sonar.issue.ignore.multicriteria.e1.resourceKey>\n")
+    pom_cases = [
+        ("an uncommented pom exclusion blocks", "pom.xml",
+         pom("    <sonar.exclusions>**/App.java</sonar.exclusions>\n"), 2, ["pom.xml:3:"]),
+        ("a same-line comment justifies a pom exclusion, and the report shows it", "pom.xml",
+         pom("    <sonar.exclusions>**/gen/**</sonar.exclusions> <!-- generated -->\n"), 0,
+         ["pom.xml:3: <sonar.exclusions>**/gen/**</sonar.exclusions> (reason: generated)"]),
+        ("a comment just above a block justifies every property of it", "pom.xml",
+         pom(multicriteria), 0,
+         ["pom.xml:4: ", "pom.xml:5: ", "pom.xml:6: ",
+          "(reason: Module declarations sit alone in their package.)"]),
+        ("a multi-line value is one property, justified by the comment above it", "pom.xml",
+         pom("    <!-- generated code -->\n    <sonar.exclusions>\n      **/gen/**\n"
+             "    </sonar.exclusions>\n"), 0,
+         ["pom.xml:4: <sonar.exclusions>**/gen/**</sonar.exclusions> (reason: generated code)"]),
+        ("a property that borrows its block's reason shows that reason", "pom.xml",
+         pom("    <!-- Generated code. -->\n"
+             "    <sonar.exclusions>**/gen/**</sonar.exclusions>\n"
+             "    <sonar.coverage.exclusions>**/App.java</sonar.coverage.exclusions>\n"), 0,
+         ["pom.xml:5: <sonar.coverage.exclusions>**/App.java</sonar.coverage.exclusions>"
+          " (reason: Generated code.)"]),
+        ("a comment above a blank line justifies nothing", "pom.xml",
+         pom("    <!-- reason -->\n\n    <sonar.skip>true</sonar.skip>\n"), 2, ["pom.xml:5:"]),
+        ("an empty comment justifies nothing", "pom.xml",
+         pom("    <!-- -->\n    <sonar.exclusions>**/App.java</sonar.exclusions>\n"), 2,
+         ["pom.xml:4:"]),
+        ("a property inside a comment is not a property", "pom.xml",
+         pom("    <!-- <sonar.exclusions>**/*</sonar.exclusions> -->\n"), 0, []),
+        ("a tag named in a comment cannot swallow a real property", "pom.xml",
+         pom("    <!-- see <sonar.exclusions> -->\n\n"
+             "    <sonar.exclusions>**/App.java</sonar.exclusions>\n"), 2, ["pom.xml:5:"]),
+        ("file.suffixes narrows analysis, so it needs a reason", "pom.xml",
+         pom("    <sonar.java.file.suffixes>.nope</sonar.java.file.suffixes>\n"), 2,
+         ["pom.xml:3:"]),
+        ("a Sonar property in .mvn/maven.config blocks: only a pom is accepted",
+         ".mvn/maven.config", "-Dsonar.coverage.exclusions=**/*\n", 2,
+         [".mvn/maven.config:1:"]),
+        ("a Sonar property that hides nothing passes silently", "pom.xml",
+         pom("    <sonar.projectName>x</sonar.projectName>\n"
+             "    <sonar.scm.exclusions.disabled>true</sonar.scm.exclusions.disabled>\n"), 0, []),
+        ("a generated pom copy is not audited", "dependency-reduced-pom.xml",
+         pom("    <sonar.exclusions>**/App.java</sonar.exclusions>\n"), 0, []),
+        ("a module pom is audited", "backend/pom.xml",
+         pom("    <sonar.exclusions>**/App.java</sonar.exclusions>\n"), 2,
+         ["backend/pom.xml:3:"]),
+        # Tag forms Maven reads as the same property.
+        ("a space before > is still the property", "pom.xml",
+         pom("    <sonar.coverage.exclusions >**/App.java</sonar.coverage.exclusions>\n"), 2,
+         ["pom.xml:3: <sonar.coverage.exclusions>**/App.java</sonar.coverage.exclusions>"]),
+        ("a newline before > is still the property", "pom.xml",
+         pom("    <sonar.exclusions\n      >**/Gen.java</sonar.exclusions>\n"), 2,
+         ["pom.xml:3: <sonar.exclusions>**/Gen.java</sonar.exclusions>"]),
+        ("an attribute on the start tag is still the property", "pom.xml",
+         pom('    <sonar.cpd.exclusions a="b">**/App.java</sonar.cpd.exclusions>\n'), 2,
+         ["pom.xml:3: <sonar.cpd.exclusions>**/App.java</sonar.cpd.exclusions>"]),
+        ("an end tag with whitespace swallows nothing after it", "pom.xml",
+         pom("    <sonar.exclusions>**/gen/**</sonar.exclusions > <!-- generated -->\n"
+             "    <a>" + "x" * 250 + "</a>\n"
+             "    <sonar.coverage.exclusions>**/App.java</sonar.coverage.exclusions>\n"), 2,
+         ["pom.xml:5: <sonar.coverage.exclusions>**/App.java</sonar.coverage.exclusions>"]),
+        ("a self-closing tag swallows nothing after it", "pom.xml",
+         pom("    <sonar.projectName />\n\n"
+             "    <sonar.exclusions>**/App.java</sonar.exclusions>\n"), 2, ["pom.xml:5:"]),
+        ("a long value is shown whole", "pom.xml",
+         pom("    <!-- generated -->\n    <sonar.exclusions>" + "**/gen/**," * 30
+             + "**/App.java</sonar.exclusions>\n"), 0, ["**/App.java</sonar.exclusions>"]),
+    ]
+    for name, path, text, want_exit, want_shown in pom_cases:
+        reset(repo)
+        put(repo / path, text)
+        before = len(calls())
+        proc = stop(repo)
+        where = proc.stderr if want_exit == 2 else shown(proc)
+        ok = (proc.returncode == want_exit and len(calls()) == before
+              and all(w in where for w in want_shown)
+              and (bool(want_shown) or proc.stdout == ""))
+        check(f"sonar-gate: {name}", ok,
+              f"exit {proc.returncode}, {len(calls()) - before} calls, "
+              f"stdout {proc.stdout[:200]!r}, stderr {proc.stderr[:200]!r}")
+
+    reset(repo)
+    put(repo / app, "class App { int red; }\n")
+    put(repo / "pom.xml", pom("    <sonar.exclusions>**/App.java</sonar.exclusions>\n"))
+    before = len(calls())
+    proc = stop(repo, GIT_CONFIG_COUNT="3", GIT_CONFIG_KEY_0="diff.noprefix",
+                GIT_CONFIG_VALUE_0="true", GIT_CONFIG_KEY_1="color.ui",
+                GIT_CONFIG_VALUE_1="always", GIT_CONFIG_KEY_2="diff.external",
+                GIT_CONFIG_VALUE_2=str(silent))
+    check("sonar-gate: excluding a changed file in the pom blocks before any scan, "
+          "whatever the user's diff config",
+          proc.returncode == 2 and len(calls()) == before and "pom.xml:3:" in proc.stderr,
+          f"exit {proc.returncode}, {len(calls()) - before} calls, stderr {proc.stderr[:200]!r}")
+
+    # What fooled a diff-parsing audit: merged hunks numbered an uncommented exclusion onto an
+    # unrelated comment, and a -diff attribute hid the added lines outright.
+    reset(repo)
+    put(repo / "pom.xml", pom("    <a>1</a>\n    <b>2</b>\n"))
+    git(repo, "commit", "-q", "-am", "two properties")
+    put(repo / "pom.xml", pom("    <!-- first insertion -->\n    <a>1</a>\n    <b>2</b>\n"
+                              "    <sonar.exclusions>**/App.java</sonar.exclusions>\n"))
+    put(repo / ".gitattributes", "pom.xml -diff\n*.java -diff\n")
+    put(repo / app, "class App { int red; } // NOSONAR\n")
+    before = len(calls())
+    proc = stop(repo, GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="diff.interHunkContext",
+                GIT_CONFIG_VALUE_0="5")
+    check("sonar-gate: .gitattributes and merged hunks hide no suppression and misnumber none",
+          proc.returncode == 2 and len(calls()) == before
+          and "pom.xml:6: <sonar.exclusions>" in proc.stderr and f"{app}:1:" in proc.stderr,
+          f"exit {proc.returncode}, {len(calls()) - before} calls, stderr {proc.stderr[:300]!r}")
+
+    reset(repo)
+    legacy = "    <sonar.exclusions>\n      **/gen/**\n    </sonar.exclusions>\n"
+    put(repo / "pom.xml", pom(legacy))
+    git(repo, "commit", "-q", "-am", "legacy exclusion")
+    proc = stop(repo)
+    check("sonar-gate: a suppression the base already has is not audited again",
+          proc.returncode == 0 and proc.stdout == "",
+          f"exit {proc.returncode}, stderr {proc.stderr[:200]!r}")
+    put(repo / "pom.xml", pom(legacy.replace("**/gen/**\n", "**/gen/**\n      **/App.java\n")))
+    proc = stop(repo)
+    check("sonar-gate: a value added inside an existing multi-line property blocks",
+          proc.returncode == 2
+          and "pom.xml:3: <sonar.exclusions>**/gen/** **/App.java</sonar.exclusions>"
+          in proc.stderr,
+          f"exit {proc.returncode}, stderr {proc.stderr[:300]!r}")
+
+    # The java audit compares blobs too: paths arrive unquoted, lines are counted rather
+    # than treated as a set, and a moved file is audited as new.
+    reset(repo)
+    sud, legacy_java = "src/main/java/Süd.java", "src/main/java/Legacy.java"
+    grandfathered = "class Legacy {\n    void f() {\n        g(); // NOSONAR\n    }\n}\n"
+    put(repo / sud, "class Sud {}\n")
+    put(repo / legacy_java, grandfathered)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "a grandfathered bare NOSONAR")
+    java_cases = [
+        ("a bare NOSONAR in a non-ASCII path blocks",
+         lambda: put(repo / sud, "class Sud {} // NOSONAR\n"), f"{sud}:1:"),
+        ("a second copy of a grandfathered bare NOSONAR blocks",
+         lambda: put(repo / legacy_java, grandfathered.replace(
+             "        g(); // NOSONAR\n", "        g(); // NOSONAR\n" * 2)),
+         f"{legacy_java}:4:"),
+        ("a file moved since the base is audited as new",
+         lambda: (repo / legacy_java).rename(repo / "src/main/java/Moved.java"),
+         "src/main/java/Moved.java:3:"),
+    ]
+    for name, change, want in java_cases:
+        reset(repo)
+        change()
+        before = len(calls())
+        proc = stop(repo)
+        check(f"sonar-gate: {name}",
+              proc.returncode == 2 and len(calls()) == before and want in proc.stderr,
+              f"exit {proc.returncode}, {len(calls()) - before} calls, "
+              f"stderr {proc.stderr[:300]!r}")
+
+    # Latin-1 sources under a UTF-8 locale, pinned here rather than inherited: macOS awk
+    # aborts on such a byte and grep stops matching the line, unless the hook runs them
+    # under LC_ALL=C.
+    utf8 = {"LC_ALL": "en_US.UTF-8", "LANG": "en_US.UTF-8"}
+    latin1_cases = [
+        ("a bare NOSONAR on a Latin-1 line blocks", "src/main/java/Cafe.java",
+         'class Cafe { String s = "café"; } // NOSONAR\n', 2, "src/main/java/Cafe.java:1:"),
+        ("a bare NOSONAR in a Latin-1 file blocks", "src/main/java/Vieux.java",
+         "// écrit en Latin-1\nclass Vieux {} // NOSONAR\n", 2, "src/main/java/Vieux.java:2:"),
+        ("an uncommented exclusion in a Latin-1 pom blocks", "pom.xml",
+         '<?xml version="1.0" encoding="ISO-8859-1"?>\n'
+         + pom("    <name>Société</name>\n"
+               "    <sonar.exclusions>**/App.java</sonar.exclusions>\n"), 2, "pom.xml:5:"),
+    ]
+    for name, path, text, want_exit, want in latin1_cases:
+        reset(repo)
+        (repo / path).write_bytes(text.encode("latin-1"))
+        before = len(calls())
+        proc = stop(repo, **utf8)
+        check(f"sonar-gate: {name}",
+              proc.returncode == want_exit and len(calls()) == before
+              and want.encode() in proc.stderr.encode("utf-8", "surrogateescape"),
+              f"exit {proc.returncode}, {len(calls()) - before} calls, "
+              f"stderr {proc.stderr[:300]!r}")
 
     repo = new_repo("unborn", "main", commit=False)
     before = len(calls())

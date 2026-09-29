@@ -41,6 +41,64 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **Pom-level Sonar suppressions are held to the NOSONAR rule, and reports reach the user
+  through `systemMessage`** (2026-09-30). PersonalFinance's step 0.8 suppressed a rule
+  with `sonar.issue.ignore.multicriteria` in its root pom, and the Stop hook neither
+  blocked nor reported it: its audit read only added `*.java` lines. A session red on
+  `Foo.java` could exclude that file in the pom, and the gate would answer "clean" with
+  nothing printed. Two changes in `hooks/sonar-gate-on-stop.sh` close that:
+  - **The audit.** A Sonar property that excludes, skips or narrows analysis is held to
+    the NOSONAR rule. That covers `*exclusions`, `*inclusions`, `*suffixes`,
+    `sonar.issue.ignore.*`, `sonar.issue.enforce.*`, `sonar.skip`, `sonar.sources` and
+    `sonar.tests`.
+    - **The reason.** In a `pom.xml`, each new or changed property needs an XML comment
+      on its own lines, or one ending just above its block of adjacent suppression
+      properties. That is how a three-line `multicriteria` entry is naturally commented.
+      The report shows each reason, so a property that borrows its block's comment is
+      visible as such.
+    - **Poms are read as elements, with comments blanked.** A value spread over several
+      lines is then one property, judged at its opening line. The start tag may carry
+      whitespace or attributes, and the end tag whitespace. Maven 3.9.16 reads all of
+      these forms as the same property, and a first scanner that knew only
+      `<sonar.x>value</sonar.x>` let each one through. A self-closing or unterminated tag
+      ends at its own `>`, so it swallows nothing after it.
+    - **Only a pom is accepted.** Any such property in `.mvn/maven.config` or
+      `.mvn/jvm.config` blocks. The reason is one audited place: `maven.config` does
+      take `#` comments since Maven 3.9, while `jvm.config` takes none.
+    - **The audit runs even when no java file changed**, though nothing is scanned
+      then. `--files` would be empty, which is why "scan on a pom change" was rejected.
+    - **Blocking every pom suppression was rejected too:** it would forbid excluding
+      generated code.
+    - **Known limit:** a value routed through a `${property}` is not traced.
+  - **No diff parsing.** Both audits compare each file with its blob at the fork point.
+    The first version parsed `git diff -U0`. Review broke it two ways: a `-diff`
+    attribute hid the lines, and `diff.interHunkContext` renumbered an uncommented
+    exclusion onto an unrelated comment. Its here-strings also failed under macOS bash
+    3.2, which creates here-document temp files outside `$TMPDIR`, and an audit that
+    cannot run now exits 1 rather than pass.
+    - **Lines are counted, not collected as a set,** so a second copy of a grandfathered
+      bare NOSONAR is new.
+    - **Paths come through `core.quotePath=false`.** A quoted non-ASCII path used to fail
+      the file test and was skipped.
+    - **A file moved since the fork point is audited as new,** so its old suppressions
+      need reasons too. That was judged cheaper than mapping renames.
+    - **One `grep -l` pass picks the Java files worth auditing.** Per-file processes had
+      cost about 7.5 ms per changed file on every Stop, fingerprint hits included.
+  - **The channel.** The hooks reference says stderr from a hook that exits 0 "goes to the
+    debug log only, never the transcript, and Claude never sees it". The justified-NOSONAR
+    report had gone there since it was written, and its fixture pinned stderr, so it had
+    never reached anyone. Reports now go out as a `systemMessage`, the channel
+    `session-rules.sh` already uses. Now that the channel is visible, each set is shown
+    once: it is keyed per repo in `$TMPDIR`, without line numbers, so an edit above a
+    suppression does not report it again.
+
+  Deleting `.sonar-gate` while the fork point still has it is the other quiet way off the
+  gate. It now draws a `systemMessage` on every Stop while the marker stays deleted. A repo
+  that never had the marker stays silent. `scripts/test_hooks.py` pins all of it, and
+  every row that pins a fix failed against the version before it. Every pattern is ASCII,
+  so the text tools run under `LC_ALL=C`: in a UTF-8 locale, macOS awk aborts on a Latin-1
+  byte and grep stops matching the line. The Latin-1 rows pin the locale for that reason.
+
 - **The self-review loop is one text in two rules, and the reviewer reads the frontend
   checklist rather than copying it** (2026-09-27). The loop had drifted: `java.md` gained
   the re-review-after-edit rule and "the loop adds no quality of its own", and
@@ -298,6 +356,16 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Known open questions
 
+- **Index flags hide a file from the Sonar gate** (2026-09-30).
+  `git update-index --assume-unchanged` or `--skip-worktree` on a pom or a java file
+  takes it out of `git diff --name-only`. The file then drops out of the trigger, the
+  suppression audit and the scan alike. This predates the pom audit. A cheap guard would
+  refuse, or warn, when `git ls-files -v` shows a lowercase tag or `S` on a gated path.
+- **A commit on the base branch leaves the Sonar gate's view** (2026-09-30). In a repo with
+  no remote, where work lands directly on `main`, the fork point is `HEAD`. A mid-turn
+  commit therefore takes a red file out of the diff, and the gate never looks at it again.
+  Nothing guards this. Sessions commit only when asked, and PersonalFinance's steps run
+  the gate before committing.
 - **Test-running discipline**: the reviewer can run tests, but the invoking session is
   responsible for green tests before invocation. Whether the reviewer re-runs them is
   non-deterministic. Acceptable; revisit if review latency becomes a concern.
