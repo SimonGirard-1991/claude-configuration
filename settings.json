@@ -263,7 +263,7 @@
   },
   "sandbox": {
     "enabled": true,
-    "autoAllowBashIfSandboxed": false,
+    "autoAllowBashIfSandboxed": true,
     "network": {
       "allowLocalBinding": true
     },
