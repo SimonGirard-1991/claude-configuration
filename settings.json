@@ -171,6 +171,9 @@
   "sandbox": {
     "enabled": true,
     "autoAllowBashIfSandboxed": false,
+    "network": {
+      "allowLocalBinding": true
+    },
     "filesystem": {
       "allowWrite": [
         "~/.npm/_cacache",
