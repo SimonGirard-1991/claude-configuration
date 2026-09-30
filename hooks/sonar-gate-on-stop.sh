@@ -155,10 +155,10 @@ new_lines() {
 
 SONAR_SUPPRESSION='sonar\.(issue\.(ignore|enforce)\.|([[:alnum:]_-]+\.)*(exclusions|inclusions|skip|sources|tests|suffixes)([^[:alnum:]_.-]|$))'
 
-# Prints G or B, a tab, then an entry for each suppression property of the pom $1 that is new or
-# changed against the base: G when an XML comment gives its reason, B when none does.
-pom_audit() {
-  RE="$SONAR_SUPPRESSION" P="$1" LC_ALL=C awk '
+# Awk functions that read a pom as elements with comments blanked. scan() fills F, L, N and V
+# with the first line, last line, name and whitespace-collapsed value of each property whose
+# name matches ENVIRON["RE"], and returns how many it found.
+POM_SCAN='
     function collapse(s) {
       gsub(/[[:space:]]+/, " ", s)
       sub(/^ /, "", s)
@@ -225,6 +225,12 @@ pom_audit() {
       }
       return n
     }
+'
+
+# Prints G or B, a tab, then an entry for each suppression property of the pom $1 that is new or
+# changed against the base: G when an XML comment gives its reason, B when none does.
+pom_audit() {
+  RE="$SONAR_SUPPRESSION" P="$1" LC_ALL=C awk "$POM_SCAN"'
     { sub(/\r$/, "") }
     FILENAME == ARGV[1] { old = old $0 "\n"; next }
     { doc = doc $0 "\n"; line[FNR] = $0 }
@@ -289,6 +295,32 @@ suppressing=""
 if [ -n "$changed" ]; then
   suppressing=$(cd "$repo" && printf '%s\n' "$changed" | tr '\n' '\0' |
     LC_ALL=C xargs -0 grep -lE -e '@SuppressWarnings|NOSONAR' -- 2>/dev/null)
+fi
+
+# Prints, as one anchored ERE, the paths the base's root pom keeps out of analysis through
+# sonar.exclusions. Sonar reads them as ant patterns relative to each module, so "**/" matches
+# any leading directories, none included, while "*" and "?" stop at a "/". A pattern not rooted
+# in "**/" is matched from the repository root instead, which can only exempt less than Sonar does.
+excluded_paths_ere() {
+  RE='^sonar[.]exclusions$' LC_ALL=C awk "$POM_SCAN"'
+    { sub(/\r$/, ""); doc = doc $0 "\n" }
+    END { n = scan(doc, F, L, N, V); for (i = 1; i <= n; i++) print V[i] }
+  ' <(base_blob pom.xml) | tr ',' '\n' | LC_ALL=C sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' |
+    LC_ALL=C sed -e 's/[].[^$+(){}|\\]/\\&/g' -e 's|?|[^/]|g' -e 's|[*][*]/|@DIRS@|g' \
+      -e 's|[*][*]|@ANY@|g' -e 's|[*]|[^/]*|g' -e 's|@DIRS@|(.*/)?|g' -e 's|@ANY@|.*|g' |
+    LC_ALL=C awk '{ ere = ere (NR > 1 ? "|" : "") $0 } END { if (NR) print "^(" ere ")$" }'
+}
+
+# Code that Sonar never analyzes cannot hide a Sonar finding, so its suppressions are not
+# audited: generators such as jOOQ and openapi-generator put @SuppressWarnings("all") on every
+# class they write. Only exclusions the base already has count. One added in this change is
+# held to the pom audit above and exempts nothing until it is committed, so every exemption
+# rests on an exclusion whose reason has been seen.
+if [ -n "$suppressing" ]; then
+  excluded=$(excluded_paths_ere) || audit_failed pom.xml
+  if [ -n "$excluded" ]; then
+    suppressing=$(printf '%s\n' "$suppressing" | LC_ALL=C grep -vE -e "$excluded")
+  fi
 fi
 
 bad=""

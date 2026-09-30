@@ -839,6 +839,43 @@ def test_sonar_gate() -> None:
               f"exit {proc.returncode}, {len(calls()) - before} calls, "
               f"stderr {proc.stderr[:300]!r}")
 
+    # Code Sonar never analyzes cannot hide a finding, so a suppression there is not audited.
+    # The root pom's sonar.exclusions draws that line the way Sonar reads it: "**/" spans any
+    # directories, none included, and "*" stops at a "/".
+    repo = new_repo("generated", "main")
+    put(repo / "pom.xml", pom("    <!-- Generated code. -->\n"
+                              "    <sonar.exclusions>**/gen/**, **/flat/*.java</sonar.exclusions>\n"))
+    put(repo / "backend/pom.xml", pom("    <!-- Module-level. -->\n"
+                                      "    <sonar.exclusions>**/modgen/**</sonar.exclusions>\n"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "exclusions")
+    generated = '@SuppressWarnings({ "all", "unchecked" })\nclass G {}\n'
+    exempt_cases = [
+        ("a suppression in code the root pom excludes is not audited",
+         "backend/src/main/gen/app/G.java", 0),
+        ("a suppression at the top of an excluded tree is not audited", "gen/G.java", 0),
+        ("a file matching a single * is not audited", "src/flat/G.java", 0),
+        ("a single * in an exclusion stops at a /", "src/flat/deep/G.java", 2),
+        ("an exclusion in a module pom exempts nothing", "backend/src/modgen/G.java", 2),
+        ("a suppression outside the excluded code is still audited", "src/main/java/G.java", 2),
+    ]
+    for name, path, want_exit in exempt_cases:
+        reset(repo)
+        put(repo / path, generated)
+        proc = stop(repo)
+        check(f"sonar-gate: {name}",
+              proc.returncode == want_exit and (want_exit == 0 or f"{path}:1:" in proc.stderr),
+              f"exit {proc.returncode}, stderr {proc.stderr[:300]!r}")
+
+    reset(repo)
+    put(repo / "pom.xml", pom("    <!-- Generated code. -->\n"
+                              "    <sonar.exclusions>**/gen/**, **/late/**</sonar.exclusions>\n"))
+    put(repo / "late/G.java", generated)
+    proc = stop(repo)
+    check("sonar-gate: an exclusion added in the same change exempts nothing yet",
+          proc.returncode == 2 and "late/G.java:1:" in proc.stderr,
+          f"exit {proc.returncode}, stderr {proc.stderr[:300]!r}")
+
     repo = new_repo("unborn", "main", commit=False)
     before = len(calls())
     codes = [stop(repo).returncode, stop(repo).returncode]

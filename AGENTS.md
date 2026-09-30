@@ -41,6 +41,34 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **Code the base's Sonar exclusions keep out of analysis is out of the suppression audit**
+  (2026-09-30). PersonalFinance's step 1.2 generated 21 jOOQ classes, and the Stop hook refused
+  each one. jOOQ puts `@SuppressWarnings({ "all", "unchecked", "rawtypes", "this-escape" })` on
+  every class it writes, the audit read every added java line, and Sonar never analyzes those
+  files: the root pom excludes them with a reason. The gate went red on code the analyzer cannot
+  see, and it would do the same for every new jOOQ table and every openapi-generator module.
+  Simon chose to exempt that code in the hook.
+  - **The exemption follows the base's root pom.** Its `sonar.exclusions` are read as Sonar reads
+    them, as ant patterns: `**/` spans any leading directories, none included, and `*` and `?`
+    stop at a `/`.
+    - **Only exclusions the base already has count.** One added in the same change is held to
+      the pom audit and exempts nothing until it is committed, so every exemption rests on an
+      exclusion whose reason has been seen. The first candidate read the working tree's pom. An
+      existing fixture caught it: an uncommented exclusion then hid its file's `NOSONAR` from the
+      report.
+    - **Only the root pom counts.** A module pom's exclusion exempts nothing, and neither does a
+      pattern not rooted in `**/`, which is matched from the repository root. Both can only make
+      the audit stricter than Sonar, never laxer.
+    - **The element scanner is shared.** `pom_audit` and the exemption use one set of awk
+      functions, so the two cannot read a pom differently.
+  - **Rejected:**
+    - A jOOQ generator subclass that prints no class annotations. It would cover jOOQ only, and
+      it would change what javac says about generated code for the gate's sake.
+    - Leaving the lines until they are committed. The repo has no remote, so the base is `HEAD`,
+      and every Stop before the commit blocks.
+  - `scripts/test_hooks.py` pins seven rows. The three rows that exempt failed against the
+    previous hook. The four that must stay audited pass on both.
+
 - **Pom-level Sonar suppressions are held to the NOSONAR rule, and reports reach the user
   through `systemMessage`** (2026-09-30). PersonalFinance's step 0.8 suppressed a rule
   with `sonar.issue.ignore.multicriteria` in its root pom, and the Stop hook neither
