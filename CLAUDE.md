@@ -9,6 +9,7 @@
 
 - In the main session, enter plan mode for complex multi-step work and get the plan approved before editing. A subagent works from the plan its caller gave it (subagents cannot enter plan mode).
 - Commits: a one-line conventional subject (`feat:`, `fix:`, `chore:`); add a body only for what the diff cannot show.
+- **Bound what Bash prints.** Read a file you may edit with Read, not `cat`: Edit refuses a file Read has not seen, so `cat` first means reading it twice. Otherwise read only the part you need: find it with `grep -n`, then a `sed -n` range or Read with offset/limit. Send builds and test runs to a log in `$TMPDIR`, then print the exit code and the failures or the tail.
 
 # This machine
 

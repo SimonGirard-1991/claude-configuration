@@ -56,6 +56,28 @@ says explicitly that the external reviewer was skipped — no retry loop.
   the other way. The regex caught `bash -c "x; env; y"`, because separators fell on both sides
   of `env` inside the quotes, and it already missed `bash -c 'env | grep'`. Both are one known
   gap, pinned in `scripts/test_hooks.py`.
+- **Bash output is bounded by a CLAUDE.md line, not by a cap or a hook** (2026-10-01).
+  `/doctor` put Bash results at 171k tokens, 17% of a session's context. The fortnight's 72
+  transcripts held 2,854 Bash results, 6.3M characters in all:
+  - **File reads made up 68%.** These were `cat`, `sed -n`, `head` and `for … cat` loops,
+    which auto mode's system prompt invites. Up to 1.3M characters went to files the same
+    session also opened with Read or changed with Edit or Write. Edit refuses a file that
+    only `cat` has shown, and two Edits in the fortnight failed that way, so a `cat` before an
+    edit reads the file twice. The count matches basenames, so it is an upper bound.
+  - **Builds and tests made up 16%.** The 242 of 393 runs that went through `tail`, `grep` or
+    a log averaged 1.1k characters. The rest printed everything, about 5k each.
+  - **No result passed 30k characters.** The default `BASH_MAX_OUTPUT_LENGTH` already caps a
+    single result.
+
+  The line asks for Read on any file that may be edited, ranges for the rest, and builds
+  through a log in `$TMPDIR`. **Rejected:**
+  - A lower `BASH_MAX_OUTPUT_LENGTH`. It cuts the middle, so a file or a stack trace loses
+    lines without a sign, and under 6% of results passed 10k characters.
+  - Teaching `bash-guard.py` to deny `cat` on a long file. Each denial costs a round trip,
+    and that guard exists for safety, not context.
+
+  Whether the line changes behaviour is not yet measured.
+
 - **Code the base's Sonar exclusions keep out of analysis is out of the suppression audit**
   (2026-09-30). PersonalFinance's step 1.2 generated 21 jOOQ classes, and the Stop hook refused
   each one. jOOQ puts `@SuppressWarnings({ "all", "unchecked", "rawtypes", "this-escape" })` on
