@@ -264,7 +264,15 @@
     "enabled": true,
     "autoAllowBashIfSandboxed": true,
     "network": {
-      "allowLocalBinding": true
+      "allowLocalBinding": true,
+      "allowedDomains": [
+        "registry.npmjs.org",
+        "pypi.org",
+        "files.pythonhosted.org",
+        "repo.maven.apache.org",
+        "repo1.maven.org",
+        "raw.githubusercontent.com"
+      ]
     },
     "filesystem": {
       "allowWrite": [

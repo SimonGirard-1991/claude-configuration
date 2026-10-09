@@ -41,6 +41,20 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **Package registries are pre-allowed for sandboxed commands** (2026-10-09). With the ask
+  rule below gone, the next prompt was a host review. A sandboxed command that reaches a
+  host outside the allowlist has to name it in `allowed_domains`, and the review sent some
+  of those calls to Simon. Over the same fortnight, `registry.npmjs.org` was named 40 times,
+  and 7 of those calls waited more than 10 s. That count includes slow commands, so it is an
+  upper bound on prompts. `sandbox.network.allowedDomains` now lists npm, PyPI and its file
+  host, Maven Central under both names, and `raw.githubusercontent.com`. The Maven hosts,
+  the PyPI file host and the raw host only serve files. PyPI uploads go to
+  `upload.pypi.org`, which stays off the list. An npm publish needs a token, and the sandbox
+  hides `~/.npmrc`. Simon applied the change through `!`, because auto mode refused the edit.
+  **Left under review:**
+  - The market-data APIs (eodhd, Yahoo, Twelve Data), whose calls carry keys.
+  - `api.github.com`, which accepts writes from any token in the environment.
+
 - **The sandbox stays on, and unsandboxed retries go to the auto-mode classifier** (2026-10-09).
   The 2026-09-26 trial's ask rule, `Bash(dangerouslyDisableSandbox:true)`, made every
   unsandboxed retry wait for Simon. Over 26 Sept to 9 Oct, that came to 1,525 prompts, about
