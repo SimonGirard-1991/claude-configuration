@@ -53,11 +53,13 @@ def flag(decision: str, reason: str) -> None:
 
 
 PUNCTUATION = set("();<>|&")
+# `name(` never opens a subshell. It turns up in heredoc bodies, as in Swift's `private(set)`.
+CALL_PAREN = re.compile(r"(?<=\w)\(")
 
 
 def segments(command: str):
     for line in command.splitlines():
-        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+        lexer = shlex.shlex(CALL_PAREN.sub("_", line), posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
         try:
             tokens = list(lexer)
@@ -106,8 +108,19 @@ for pattern, reason in SECRET_PRINTERS:
 # AUTH must not match the AUTHOR segment of GIT_AUTHOR_NAME and friends.
 SECRET_VAR = (r"[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?"
               r"|AUTH(?!OR(?:_|$|[^A-Za-z0-9_])))[A-Za-z0-9_]*")
-if re.search(r"(?:^|[;&|(\n]\s*)(?:env|printenv|set|export\s+-p|declare\s+-x)\s*(?:$|[;&|)\n])", cmd):
-    flag("deny", "Dumps the environment, which holds API keys.")
+ENV_DUMPS = (["env"], ["printenv"], ["set"], ["export", "-p"], ["declare", "-x"])
+
+
+def segments_and_substitutions(command: str):
+    for seg in segments(command):
+        yield seg
+        for tok in seg:
+            if "$(" in tok:
+                yield from segments_and_substitutions(tok.split("$(", 1)[1])
+
+
+if any(seg in ENV_DUMPS for seg in segments_and_substitutions(cmd)):
+    flag("deny", "Dumps the environment, which holds API keys. Check variables by name instead: printenv NAME.")
 if re.search(rf"\bprintenv\s+{SECRET_VAR}\b", cmd) \
         or re.search(rf"\b(?:echo|printf|print)\b[^;&|\n]*\$\{{?{SECRET_VAR}", cmd):
     flag("deny", "Prints a secret-named environment variable.")

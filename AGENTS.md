@@ -41,6 +41,21 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **`bash-guard.py` judges environment dumps by segment, like its other checks** (2026-10-01).
+  The dump check was the last one matching the raw command, so a `|`, `;` or `(` inside quotes
+  counted as a separator. In 30 days of transcripts, about half its denials were false: quoted
+  regex alternations such as `'(set|get)'`, a jq filter holding `"Bash(env)"`, and Swift's
+  `private(set)` in a heredoc, which blocked writing Swift through Bash. The other five were
+  `env | grep` checks on variables whose names were known, so the denial now names
+  `printenv NAME`. Two parsing changes came with it:
+  - **A `(` glued to a word no longer ends a segment**, in every check. `name(` never opens a
+    subshell.
+  - **A `$(…)` inside a quoted token is read as commands**, which keeps `echo "$(env)"` denied.
+
+  The check now also catches `env 2>/dev/null | grep`, which the regex missed. One case went
+  the other way. The regex caught `bash -c "x; env; y"`, because separators fell on both sides
+  of `env` inside the quotes, and it already missed `bash -c 'env | grep'`. Both are one known
+  gap, pinned in `scripts/test_hooks.py`.
 - **Code the base's Sonar exclusions keep out of analysis is out of the suppression audit**
   (2026-09-30). PersonalFinance's step 1.2 generated 21 jOOQ classes, and the Stop hook refused
   each one. jOOQ puts `@SuppressWarnings({ "all", "unchecked", "rawtypes", "this-escape" })` on
