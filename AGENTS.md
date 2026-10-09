@@ -41,6 +41,31 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **The sandbox stays on, and unsandboxed retries go to the auto-mode classifier** (2026-10-09).
+  The 2026-09-26 trial's ask rule, `Bash(dangerouslyDisableSandbox:true)`, made every
+  unsandboxed retry wait for Simon. Over 26 Sept to 9 Oct, that came to 1,525 prompts, about
+  117 a day and over 200 a day in the last week. On quick commands, a retry waited a median
+  26 s and a p90 of 5 min, against 1 s sandboxed. Simon refused 5. The prompts gated routine
+  work, which kept the agent from working unattended:
+  - **Builds and tests made up most of them.** `./mvnw` accounts for 470, mostly
+    Testcontainers needing the Docker socket, and `docker` for 436. npm and Playwright add
+    126, Xcode and Swift 99.
+  - **`excludedCommands` almost never applied.** An entry covers a call only when every
+    command in it matches. A `cd`, a file redirect, `; echo` or a pipe to `tail` keeps the
+    whole call sandboxed, and the CLAUDE.md line that sends builds to a log in `$TMPDIR`
+    gives nearly every build one of those. The entries stay for the bare forms, such as the
+    Sonar gate run by hand.
+
+  Simon deleted the rule through `/permissions`: auto mode refused the edit as
+  self-modification. Secrets keep their protections. Credential files and `.env` stay hidden
+  from Read and from sandboxed commands, the two Sonar tokens stay stripped from their
+  environment, and `bash-guard.py` still applies to every command. **Rejected:**
+  - Turning the sandbox off. The friction came from the prompt, not the sandbox.
+  - `allowUnsandboxedCommands: false`. Docker and Testcontainers cannot run sandboxed, so
+    integration tests could never run.
+  - The Docker socket in `network.allowUnixSockets`. A sandboxed `docker run -v ~:/h` could
+    then read every secret, with no classifier review.
+
 - **`bash-guard.py` judges environment dumps by segment, like its other checks** (2026-10-01).
   The dump check was the last one matching the raw command, so a `|`, `;` or `(` inside quotes
   counted as a separator. In 30 days of transcripts, about half its denials were false: quoted
@@ -56,6 +81,7 @@ says explicitly that the external reviewer was skipped — no retry loop.
   the other way. The regex caught `bash -c "x; env; y"`, because separators fell on both sides
   of `env` inside the quotes, and it already missed `bash -c 'env | grep'`. Both are one known
   gap, pinned in `scripts/test_hooks.py`.
+
 - **Bash output is bounded by a CLAUDE.md line, not by a cap or a hook** (2026-10-01).
   `/doctor` put Bash results at 171k tokens, 17% of a session's context. The fortnight's 72
   transcripts held 2,854 Bash results, 6.3M characters in all:
