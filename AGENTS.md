@@ -41,6 +41,24 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **The sandbox is off; the 2026-09-26 trial is over** (2026-10-09). Even without the ask
+  rule, a command that needs Docker, Testcontainers, a browser or Xcode has to carry
+  `dangerouslyDisableSandbox`. Auto mode's built-in Safety Bypass Flag rule refuses a flag
+  named that way unless the user names it, and it refused two Playwright e2e runs that
+  evening. Every interruption since the trial began traced back to the sandbox, so Simon
+  turned it off through `!`: auto mode refuses edits to its own settings. Secrets keep the
+  protections they had before the trial: the Read denials on `.env` and credential files,
+  `bash-guard.py`, and the classifier. **What is lost:**
+  - Credential files are no longer hidden from Bash at the OS level.
+  - The two Sonar tokens are back in every command's environment.
+  - A secret read that names no file (`grep -r KEY .`), the gap `bash-guard.py` left to the
+    trial, is open again.
+
+  **Rejected:** an `autoMode.allow` exception naming the flag (after `"$defaults"`, which
+  keeps the built-in exceptions). It would have kept the sandbox, but put one more rule
+  between Simon and every build. The `sandbox` block stays in settings, so turning it back
+  on is one key.
+
 - **Package registries are pre-allowed for sandboxed commands** (2026-10-09). With the ask
   rule below gone, the next prompt was a host review. A sandboxed command that reaches a
   host outside the allowlist has to name it in `allowed_domains`, and the review sent some
@@ -54,6 +72,8 @@ says explicitly that the external reviewer was skipped — no retry loop.
   **Left under review:**
   - The market-data APIs (eodhd, Yahoo, Twelve Data), whose calls carry keys.
   - `api.github.com`, which accepts writes from any token in the environment.
+
+  *Superseded the same day:* the sandbox is off; see the entry above.
 
 - **The sandbox stays on, and unsandboxed retries go to the auto-mode classifier** (2026-10-09).
   The 2026-09-26 trial's ask rule, `Bash(dangerouslyDisableSandbox:true)`, made every
@@ -79,6 +99,8 @@ says explicitly that the external reviewer was skipped — no retry loop.
     integration tests could never run.
   - The Docker socket in `network.allowUnixSockets`. A sandboxed `docker run -v ~:/h` could
     then read every secret, with no classifier review.
+
+  *Superseded the same day:* the sandbox is off; see the first entry.
 
 - **`bash-guard.py` judges environment dumps by segment, like its other checks** (2026-10-01).
   The dump check was the last one matching the raw command, so a `|`, `;` or `(` inside quotes
