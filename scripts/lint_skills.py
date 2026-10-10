@@ -51,7 +51,7 @@ BUILTIN_SKILLS = {
 
 # Documents that legitimately exist outside a references/ directory. Naming one
 # from inside references/ is a normal cross-reference, not a dangling sibling.
-ROOT_DOCS = {"SKILL.md", "README.md", "CLAUDE.md", "AGENTS.md", "MEMORY.md"}
+ROOT_DOCS = {"SKILL.md", "README.md", "CLAUDE.md", "AGENTS.md", "MAINTAINERS.md", "MEMORY.md"}
 REF_TOC_LINES = 100
 REF_TOC_WITHIN = 50
 

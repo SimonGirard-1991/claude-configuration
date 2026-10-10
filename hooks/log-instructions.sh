@@ -2,9 +2,9 @@
 # InstructionsLoaded: append one line per instruction-file load to logs/rules.jsonl.
 #
 # The event fires for CLAUDE.md and rules/*.md loads, and for any file a CLAUDE.md
-# imports (load_reason "include"). It does not fire when AGENTS.md is read directly as
-# project instructions, which is how it loads in ~/.claude sessions, so those loads
-# leave no line here.
+# imports (load_reason "include"). It does not fire for an AGENTS.md Claude Code reads
+# directly (memory docs, "Where AGENTS.md differs from CLAUDE.md"), so ~/.claude/AGENTS.md
+# leaves no line here.
 #
 # The event has no decision control and ignores exit codes and output, so the log is the
 # hook's only product, and a dead logger shows only as silence. It therefore records
