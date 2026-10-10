@@ -1,9 +1,10 @@
-# Agents — maintainer notes
+# Maintainer notes
 
 This file exists so a future maintainer can see why the setup is shaped the way it is.
-Claude Code loads it as project instructions in sessions started in `~/.claude` (about
-4.7k tokens), and nowhere else. That is kept on purpose: it is the context a session
-working on this config needs.
+Nothing loads it on its own. `AGENTS.md` beside it points here, and Claude Code reads that
+pointer in any session under the home directory whose project has no `CLAUDE.md` of its own
+(`~/.claude/CLAUDE.md` does not count). Read this file before any change `git status` would
+show in this repo, an edit or a new file (2026-10-11; see the decision log).
 
 ## Agents in this setup
 
@@ -40,6 +41,48 @@ Edge cases: a ⚠️ verdict carrying only 🔵 issues may return to the user un
 says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
+
+- **The maintainer notes left `AGENTS.md`, which loaded far beyond `~/.claude`**
+  (2026-10-11). The 09-24 entry kept this file as `AGENTS.md` on the finding that it loaded
+  in sessions started in `~/.claude`. Since v2.1.277, Claude Code reads `AGENTS.md` directly
+  when no `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md` sits in the working
+  directory or above it (`~/.claude/CLAUDE.md` does not count), and it then reads every
+  `AGENTS.md` and `.claude/AGENTS.md` up the tree (memory docs, § When Claude Code reads
+  AGENTS.md). `~/.claude/AGENTS.md` is the home directory's `.claude/AGENTS.md`, so it
+  loaded as project instructions in every session under `~` whose project has no
+  `CLAUDE.md`, subagents included, Explore and Plan aside (159 of 173 PersonalFinance
+  subagent transcripts carry it, 140 of them code-reviewer's). The transcripts agree:
+  - **First seen** on 2026-09-22, CLI 2.1.280, in a work repo.
+  - **Loaded:** all 123 PersonalFinance sessions that record their instruction files (7
+    record none), and sessions in MineSweeper, Tetris, a Java demo and two work
+    repos, none of which has a `CLAUDE.md`.
+  - **Not loaded:** Wealthpay, Pictures and uigen, which have one, and sessions started in
+    `$TMPDIR`.
+
+  The decision log had grown the file to 37 KB, 13.2k tokens by `/context` on 2026-10-09,
+  about a sixth of a PersonalFinance session's first-turn input (75.5k–78.5k). Three
+  things kept it unseen:
+  - **The 09-24 check** was a `/context` run in `~/.claude`. From the first load on 09-22
+    to 09-27, every `/context` run outside `~/.claude` was in Pictures or Wealthpay, which
+    have a `CLAUDE.md` and so never load it.
+  - **From 09-28 it was listed, not hidden:** `/context` in Tetris (09-28) and
+    PersonalFinance (09-29, 10-04, 10-09) showed it as a Project file at 8.4k–13.2k tokens,
+    and nobody read the row against this file's first paragraph.
+  - **`hooks/log-instructions.sh`** gets no InstructionsLoaded event for an `AGENTS.md`
+    read directly (memory docs, § Where AGENTS.md differs from CLAUDE.md).
+
+  The notes are now `MAINTAINERS.md`, which nothing loads. `AGENTS.md` keeps a pointer,
+  scoped to changes `git status` would show, so that a memory write does not send a session
+  here and a new agent, rule or skill file does. A session editing this config from a
+  project without a `CLAUDE.md` is still sent here; one from a project with a `CLAUDE.md`
+  is not, and only README's row points here then.
+  **Rejected:**
+  - Deleting `AGENTS.md`: nothing would send a config session to the decision log.
+  - The pointer in `CLAUDE.md`: it would read as one of Simon's working rules, in a file
+    that holds only those.
+  - `instructionFiles: "claude-md"` under `cc-plugin-agents-md@builtin`, or a
+    `claudeMdExcludes` pattern: either would also stop the `AGENTS.md` of repos that rely on
+    one, or this file's pointer in `~/.claude` sessions.
 
 - **The sandbox is off; the 2026-09-26 trial is over** (2026-10-09). Even without the ask
   rule, a command that needs Docker, Testcontainers, a browser or Xcode has to carry
@@ -291,7 +334,8 @@ says explicitly that the external reviewer was skipped — no retry loop.
   paragraph and README's row, both of which said nothing here loads. Renaming it out of
   the loader's reach was rejected: the cost falls only on sessions that edit this config,
   and those are the sessions that need the decision log. The two sentences were fixed
-  instead.
+  instead. *Superseded 2026-10-11:* it also loaded in every session under `~` whose
+  project has no `CLAUDE.md`, so the notes moved to `MAINTAINERS.md`; see that entry.
 - **The Sonar gate skips a re-run when no fingerprinted input changed** (2026-09-24).
   In an opted-in repo, every Stop re-ran the Maven build and analysis while the branch
   differed from its base in any java file, so a turn that touched only docs paid for a
