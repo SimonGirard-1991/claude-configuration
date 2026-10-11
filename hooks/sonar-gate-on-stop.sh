@@ -11,9 +11,10 @@
 # an analyzer decides. scripts/sonar-gate.sh runs the real Sonar ruleset and exit 2 feeds the
 # findings back, so the turn cannot end dirty.
 #
-# One file set, computed once, used three times. The trigger, the suppression scan and the
-# findings filter all read `git diff` against the fork point UNION `ls-files --others`, so an
-# untracked new class is seen by all three or none. An earlier version triggered on
+# One file set (java sources and the JS project's whole directory), computed once, used three
+# times. The trigger, the suppression scan (prose aside) and the findings filter all read
+# `git diff` against the fork point UNION `ls-files --others`, so an untracked new class is seen
+# by all three or none. An earlier version triggered on
 # `git status --porcelain` (which collapses untracked directories) while scanning `git diff`
 # alone (which cannot see untracked files at all): it could block on a file it had not read,
 # or pass one it never looked at.
@@ -30,7 +31,9 @@
 #
 # A Sonar property that excludes, skips or narrows analysis hides findings the same way, and
 # excluding the file a red finding sits in is the easy way off it, so poms are held to the same
-# rule. Each suppression property that is new or changed against the base needs an XML comment on
+# rule. Every Sonar property counts, not a list of the narrowing ones: sonar.lang.patterns.<lang>
+# drops a language and sonar.java.source turns version-gated rules off, and a list misses the
+# next such key. Each Sonar property that is new or changed against the base needs an XML comment on
 # its own lines, or one ending just above its block of adjacent suppression properties. Properties
 # are read as elements with comments blanked, in the tag forms Maven reads (whitespace or
 # attributes in a start tag, whitespace in an end tag), so a value spread over several lines is one
@@ -56,12 +59,21 @@
 # It never boots infrastructure: --no-boot means a stopped SonarQube exits 1 telling you to run
 # the script by hand once, rather than a container appearing mid-turn and a ~20s wait landing
 # inside somebody's build. Infrastructure failures never block, but they are never silent
-# either — same rule as validate-readme.sh.
+# either: they reach the user whole as a systemMessage, as does a gate still red after
+# MAX_ROUNDS. A Stop hook's exit 1 would show the user only the first line of its stderr.
+#
+# Settings come from `.sonar-gate`, `KEY = value` lines read as sonar-gate.sh reads them.
+# `js-project = DIR` adds that directory to the file set, and its sonar-project.properties to the
+# suppression audit, under the pom rule; `rules = FILE` adds the rules file to the fingerprint
+# and to an audit of its own, since a rule taken out narrows the gate. `scope = project`
+# blocks on any finding anywhere instead of the changed files' findings: a commit then moves the
+# fingerprint through the base, so the whole project is counted again.
 #
 # A green run is remembered: a Stop whose fingerprinted inputs match the last green run skips the
 # scan instead of paying for another Maven build. The fingerprint covers the base commit, and the
-# diff against it plus the untracked files for java sources, poms and the contract schemas that
-# rules/java.md treats as code; then `.sonar-gate`, the gate script and this hook. Only a green
+# diff against it plus the untracked files for java sources, poms, the contract schemas that
+# rules/java.md treats as code, the JS project's directory and the rules file; then
+# `.sonar-gate`, the gate script and this hook. Only a green
 # run records it, and it is taken before the change set is read: anything that lands later,
 # mid-scan included, changes the next fingerprint instead of being recorded as clean without
 # having been analyzed. Everything else the build reads is outside it — resources,
@@ -74,6 +86,7 @@
 ROOT="${CLAUDE_CONFIG_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 GATE="${CLAUDE_SONAR_GATE:-$ROOT/scripts/sonar-gate.sh}"
 MAX_ROUNDS=3
+GATE_TIMEOUT="${CLAUDE_SONAR_GATE_TIMEOUT:-360}"
 
 payload=$(cat)
 cwd=$(printf '%s' "$payload" | /usr/bin/jq -r '.cwd // empty' 2>/dev/null)
@@ -103,12 +116,59 @@ if [ ! -f "$repo/.sonar-gate" ]; then
   fi
   exit 0
 fi
-[ -f "$repo/pom.xml" ] || exit 0
+# Prints the value of the last `KEY = value` line of .sonar-gate, as sonar-gate.sh reads it.
+gate_setting() {
+  KEY="$1" LC_ALL=C awk '
+    { sub(/\r$/, "") }
+    /^[[:space:]]*#/ { next }
+    {
+      line = $0
+      sub(/^[[:space:]]*/, "", line)
+      if (index(line, ENVIRON["KEY"]) != 1) next
+      rest = substr(line, length(ENVIRON["KEY"]) + 1)
+      if (rest !~ /^[[:space:]]*=/) next
+      sub(/^[[:space:]]*=[[:space:]]*/, "", rest)
+      sub(/[[:space:]]+$/, "", rest)
+      value = rest
+    }
+    END { print value }
+  ' "$repo/.sonar-gate"
+}
+scope=$(gate_setting scope)
+js_dir=$(gate_setting js-project)
+js_dir="${js_dir%/}"
+rules_file=$(gate_setting rules)
+case "$scope" in
+  '') scope=changed ;;
+  changed | project) ;;
+  *)
+    tell_user "Sonar gate is OFF in $repo: .sonar-gate sets scope = $scope, and only changed and project exist."
+    exit 0
+    ;;
+esac
+# Both become pathspecs below, so a path that leaves the repository or carries pathspec magic
+# would scope the gate to something else than it says.
+for setting in "$js_dir" "$rules_file"; do
+  case "$setting" in
+    /* | . | .. | ../* | */../* | */.. | ./* | *[!A-Za-z0-9._/-]*)
+      tell_user "Sonar gate is OFF in $repo: .sonar-gate names $setting, which is not a plain path inside the repository."
+      exit 0
+      ;;
+  esac
+done
+[ -f "$repo/pom.xml" ] || [ -n "$js_dir" ] || exit 0
 repo_key=$(printf '%s' "$repo" | shasum -a 256 | cut -c1-16)
 
 fp_paths=('*.java' '*pom.xml' '*.proto' '*.avsc' '*.avdl'
   '*openapi*.yaml' '*openapi*.yml' 'openapi/*' '*/openapi/*'
   '*-api.yaml' '*-api.yml')
+# The JS project counts whole: its analyzer reads .mts, .cts, .html and more than a suffix list
+# would keep up with, and listing a file it never reads costs nothing, since the script matches
+# findings to exact paths.
+js_sources=()
+[ -z "$js_dir" ] || js_sources=("$js_dir/")
+fp_paths+=(${js_sources[@]+"${js_sources[@]}"})
+[ -z "$rules_file" ] || fp_paths+=("$rules_file")
 
 fingerprint() (
   set -o pipefail
@@ -125,10 +185,11 @@ fingerprint() (
 )
 fp=$(fingerprint) || fp=""
 
-untracked=$(git -c core.quotePath=false -C "$repo" ls-files --others --exclude-standard -- '*.java' 2>/dev/null)
+sources=('*.java' pom.xml '*/pom.xml' ${js_sources[@]+"${js_sources[@]}"})
+untracked=$(git -c core.quotePath=false -C "$repo" ls-files --others --exclude-standard -- "${sources[@]}" 2>/dev/null)
 changed=$(
   {
-    git -c core.quotePath=false -C "$repo" diff --name-only "$base" -- '*.java' 2>/dev/null
+    git -c core.quotePath=false -C "$repo" diff --name-only "$base" -- "${sources[@]}" 2>/dev/null
     printf '%s\n' "$untracked"
   } | grep -v '^$' | sort -u
 )
@@ -153,7 +214,7 @@ new_lines() {
   ' <(base_blob "$1") "$repo/$1"
 }
 
-SONAR_SUPPRESSION='sonar\.(issue\.(ignore|enforce)\.|([[:alnum:]_-]+\.)*(exclusions|inclusions|skip|sources|tests|suffixes)([^[:alnum:]_.-]|$))'
+SONAR_SUPPRESSION='sonar\.[[:alnum:]_-]'
 
 # Awk functions that read a pom as elements with comments blanked. scan() fills F, L, N and V
 # with the first line, last line, name and whitespace-collapsed value of each property whose
@@ -256,13 +317,230 @@ pom_audit() {
         if (why == "") print "B\t" entry
         else print "G\t" entry " (reason: " why ")"
       }
+      print "N\t" n
     }' <(base_blob "$1") "$repo/$1"
+}
+
+# The pom scan above is hand-rolled, so a construct it misreads (a CDATA section holding "<!--",
+# say) could hide a property Maven reads. xmllint counts the Sonar properties too, and the two
+# counts must agree.
+xml_sonar_count() {
+  xmllint --xpath 'count(//*[starts-with(local-name(),"sonar.")])' "$repo/$1" 2>/dev/null
+}
+
+# A .properties line ends at LF, CRLF or a lone CR (java.util.Properties, and properties-file,
+# which @sonar/scan reads them with).
+line_ends() {
+  LC_ALL=C sed 's/\r$//' | LC_ALL=C tr '\r' '\n'
+}
+
+# Prints G or B, a tab, then an entry for each suppression property of the .properties file $1
+# that is new or changed against the base: G when # or ! comment lines give its reason just above
+# it, or just above its block of adjacent suppression properties; B when none does.
+# A line ending in a backslash continues its property, so a value spread over several lines is
+# one property.
+props_audit() {
+  RE="$SONAR_SUPPRESSION" P="$1" LC_ALL=C awk '
+    function collapse(s) {
+      gsub(/[[:space:]]+/, " ", s)
+      sub(/^ /, "", s)
+      sub(/ $/, "", s)
+      return s
+    }
+    function parse(n, LINE, F, L, K, V, E, i, m, text, start, key, value, more) {
+      m = 0
+      for (i = 1; i <= n; i++) {
+        text = LINE[i]
+        start = i
+        if (text ~ /^[[:space:]]*([#!]|$)/) continue
+        while (text ~ /(^|[^\\])(\\\\)*\\$/ && i < n) {
+          sub(/\\$/, "", text)
+          more = LINE[++i]
+          sub(/^[[:space:]]+/, "", more)
+          text = text more
+        }
+        key = text
+        sub(/^[[:space:]]*/, "", key)
+        value = key
+        sub(/[=:[:space:]].*$/, "", key)
+        E[m + 1] = (key ~ /\\/)
+        gsub(/\\/, "", key)
+        sub(/^[^=:[:space:]]*[[:space:]]*[=:]?/, "", value)
+        m++
+        F[m] = start
+        L[m] = i
+        K[m] = key
+        V[m] = collapse(value)
+      }
+      return m
+    }
+    { sub(/\r$/, "") }
+    FILENAME == ARGV[1] { old[++no] = $0; next }
+    { line[++nl] = $0 }
+    END {
+      mo = parse(no, old, OF, OL, OK, OV, OE)
+      for (j = 1; j <= mo; j++) if (OK[j] ~ ENVIRON["RE"]) seen[OK[j] "\t" OV[j]] = 1
+      m = parse(nl, line, F, L, K, V, E)
+      for (j = 1; j <= m; j++) if (K[j] ~ ENVIRON["RE"]) opens[L[j]] = F[j]
+      for (j = 1; j <= m; j++) {
+        if (E[j]) {
+          print "B\t  " ENVIRON["P"] ":" F[j] ": " K[j] "=" V[j] " (an escaped key, which the scanner decodes: write it plain)"
+          continue
+        }
+        if (K[j] !~ ENVIRON["RE"] || (K[j] "\t" V[j]) in seen) continue
+        k = F[j] - 1
+        while (k > 0 && (k in opens)) k = opens[k] - 1
+        why = ""
+        for (; k > 0 && line[k] ~ /^[[:space:]]*[#!]/; k--) {
+          text = line[k]
+          sub(/^[[:space:]]*[#!]+/, "", text)
+          why = text " " why
+        }
+        why = collapse(why)
+        entry = "  " ENVIRON["P"] ":" F[j] ": " K[j] "=" V[j]
+        if (why == "") print "B\t" entry
+        else print "G\t" entry " (reason: " why ")"
+      }
+    }' <(base_blob "$1" | line_ends) <(line_ends <"$repo/$1")
+}
+
+# Prints G or B, a tab, then an entry for each rule line of the rules file $1 that the base has
+# and the working tree lost or changed: taking a rule or a value out narrows the gate as an
+# exclusion does. G when a # line added since the base names the rule and says why, B otherwise.
+# The base's own comments justify nothing, so a header that mentions a rule cannot excuse its
+# removal.
+rules_audit() {
+  P="$1" LC_ALL=C awk '
+    function rule_line(s) {
+      sub(/#.*$/, "", s)
+      gsub(/[[:space:]]+/, " ", s)
+      sub(/^ /, "", s)
+      sub(/ $/, "", s)
+      return s
+    }
+    { sub(/\r$/, "") }
+    FILENAME == ARGV[1] {
+      t = rule_line($0)
+      if (t != "") old[t]++
+      if ($0 ~ /^[[:space:]]*#/) old_comment[$0]++
+      next
+    }
+    {
+      t = rule_line($0)
+      if (t != "") now[t]++
+      if ($0 ~ /^[[:space:]]*#/) {
+        if (old_comment[$0] > 0) old_comment[$0]--
+        else added[++na] = $0
+      }
+    }
+    # The added comment line naming rule k and saying why, other than t itself commented out.
+    function reason(k, t, i, c, own, p, rest, why) {
+      for (i = 1; i <= na; i++) {
+        c = added[i]
+        own = c
+        sub(/^[[:space:]]*#+/, "", own)
+        if (rule_line(own) == t) continue
+        p = index(c, k)
+        if (p == 0) continue
+        rest = substr(c, p + length(k))
+        if (rest ~ /^[A-Za-z0-9_]/) continue
+        gsub(/^[^A-Za-z0-9]+/, "", rest)
+        if (rest == "") continue
+        why = c
+        sub(/^[[:space:]]*#+[[:space:]]*/, "", why)
+        return why
+      }
+      return ""
+    }
+    function report(t, what, f, why) {
+      split(t, f, " ")
+      why = reason(f[1], t)
+      if (why == "") print "B\t  " ENVIRON["P"] ": " t " (" what ")"
+      else print "G\t  " ENVIRON["P"] ": " t " (" what ") (reason: " why ")"
+    }
+    END {
+      for (t in old)
+        if (now[t] + 0 < old[t]) report(t, "taken out or changed")
+      for (t in now)
+        if (now[t] > old[t] + 0 && t ~ / /) report(t, "added with parameters, which may override Sonar way")
+    }' <(base_blob "$1") "$repo/$1"
+}
+
+# Prints G or B, a tab, then an entry for each change to .sonar-gate that narrows the gate: the
+# JS project or the rules file changed or gone, scope moved off `project`, a pattern added to the
+# IDE's exclusions. G when a # line added since the base names the setting and says why, B
+# otherwise; the base's own comments justify nothing.
+gate_audit() {
+  LC_ALL=C awk '
+    function trim(s) {
+      sub(/^[[:space:]]+/, "", s)
+      sub(/[[:space:]]+$/, "", s)
+      return s
+    }
+    function setting(line, into, k, v) {
+      if (line !~ /^[[:space:]]*[A-Za-z-]+[[:space:]]*=/) return
+      k = line
+      sub(/=.*$/, "", k)
+      v = line
+      sub(/^[^=]*=/, "", v)
+      into[trim(k)] = trim(v)
+    }
+    function reason(key, i, c, own, p, rest, why) {
+      for (i = 1; i <= na; i++) {
+        c = added[i]
+        own = c
+        sub(/^[[:space:]]*#+[[:space:]]*/, "", own)
+        if (index(own, key) == 1 && substr(own, length(key) + 1) ~ /^[[:space:]]*=/) continue
+        p = index(c, key)
+        if (p == 0) continue
+        rest = substr(c, p + length(key))
+        if (rest ~ /^[A-Za-z0-9_-]/) continue
+        gsub(/^[^A-Za-z0-9]+/, "", rest)
+        if (rest == "") continue
+        why = c
+        sub(/^[[:space:]]*#+[[:space:]]*/, "", why)
+        return why
+      }
+      return ""
+    }
+    function report(key, what, why) {
+      why = reason(key)
+      if (why == "") print "B\t  .sonar-gate: " what
+      else print "G\t  .sonar-gate: " what " (reason: " why ")"
+    }
+    { sub(/\r$/, "") }
+    FILENAME == ARGV[1] {
+      if ($0 ~ /^[[:space:]]*#/) old_comment[$0]++
+      else setting($0, old)
+      next
+    }
+    {
+      if ($0 ~ /^[[:space:]]*#/) {
+        if (old_comment[$0] > 0) old_comment[$0]--
+        else added[++na] = $0
+      } else setting($0, now)
+    }
+    END {
+      if (old["js-project"] != "" && now["js-project"] != old["js-project"])
+        report("js-project", "js-project " old["js-project"] " is now \"" now["js-project"] "\"")
+      if (old["rules"] != "" && now["rules"] != old["rules"])
+        report("rules", "rules " old["rules"] " is now \"" now["rules"] "\"")
+      if (old["scope"] == "project" && now["scope"] != "project")
+        report("scope", "scope project is now \"" now["scope"] "\"")
+      n = split(old["ide-exclusions"], before, ",")
+      for (i = 1; i <= n; i++) had[trim(before[i])] = 1
+      n = split(now["ide-exclusions"], after, ",")
+      for (i = 1; i <= n; i++) {
+        pattern = trim(after[i])
+        if (pattern != "" && !(pattern in had)) report("ide-exclusions", "ide-exclusions adds " pattern)
+      }
+    }' <(base_blob .sonar-gate) "$repo/.sonar-gate"
 }
 
 # An audit that cannot run must not pass as one that found nothing.
 audit_failed() {
-  printf 'sonar gate: the suppression audit failed on %s; Sonar checks are OFF for this turn\n' "$1" >&2
-  exit 1
+  tell_user "Sonar gate: the suppression audit failed on $1; Sonar checks are OFF for this turn."
+  exit 0
 }
 
 pom_bad=""
@@ -270,6 +548,24 @@ pom_good=""
 while IFS= read -r -d '' f; do
   [ -f "$repo/$f" ] || continue
   found=$(pom_audit "$f") || audit_failed "$f"
+  scanned=""
+  while IFS=$'\t' read -r verdict entry; do
+    case "$verdict" in
+      G) pom_good="${pom_good}${entry}"$'\n' ;;
+      B) pom_bad="${pom_bad}${entry}"$'\n' ;;
+      N) scanned="$entry" ;;
+    esac
+  done < <(printf '%s\n' "$found")
+  parsed=$(xml_sonar_count "$f") || audit_failed "$f"
+  [ "$parsed" = "$scanned" ] ||
+    pom_bad="${pom_bad}  $f: Maven reads $parsed Sonar properties, the audit $scanned; write them as plain elements"$'\n'
+done < <(
+  git -C "$repo" diff --name-only -z --no-ext-diff "$base" -- pom.xml '*/pom.xml' 2>/dev/null
+  git -C "$repo" ls-files --others --exclude-standard -z -- pom.xml '*/pom.xml' 2>/dev/null
+)
+while IFS= read -r -d '' f; do
+  [ -f "$repo/$f" ] || continue
+  found=$(props_audit "$f") || audit_failed "$f"
   while IFS=$'\t' read -r verdict entry; do
     case "$verdict" in
       G) pom_good="${pom_good}${entry}"$'\n' ;;
@@ -277,9 +573,25 @@ while IFS= read -r -d '' f; do
     esac
   done < <(printf '%s\n' "$found")
 done < <(
-  git -C "$repo" diff --name-only -z --no-ext-diff "$base" -- pom.xml '*/pom.xml' 2>/dev/null
-  git -C "$repo" ls-files --others --exclude-standard -z -- pom.xml '*/pom.xml' 2>/dev/null
+  git -C "$repo" diff --name-only -z --no-ext-diff "$base" -- sonar-project.properties '*/sonar-project.properties' 2>/dev/null
+  git -C "$repo" ls-files --others --exclude-standard -z -- sonar-project.properties '*/sonar-project.properties' 2>/dev/null
 )
+found=$(gate_audit) || audit_failed .sonar-gate
+while IFS=$'\t' read -r verdict entry; do
+  case "$verdict" in
+    G) pom_good="${pom_good}${entry}"$'\n' ;;
+    B) pom_bad="${pom_bad}${entry}"$'\n' ;;
+  esac
+done < <(printf '%s\n' "$found")
+if [ -n "$rules_file" ] && [ -f "$repo/$rules_file" ]; then
+  found=$(rules_audit "$rules_file") || audit_failed "$rules_file"
+  while IFS=$'\t' read -r verdict entry; do
+    case "$verdict" in
+      G) pom_good="${pom_good}${entry}"$'\n' ;;
+      B) pom_bad="${pom_bad}${entry}"$'\n' ;;
+    esac
+  done < <(printf '%s\n' "$found")
+fi
 for f in .mvn/maven.config .mvn/jvm.config; do
   [ -f "$repo/$f" ] || continue
   found=$(KEEP="$SONAR_SUPPRESSION" new_lines "$f") || audit_failed "$f"
@@ -289,12 +601,22 @@ for f in .mvn/maven.config .mvn/jvm.config; do
   done < <(printf '%s\n' "$found")
 done
 
+# What the analyzers take as a suppression, measured on 2026-10-11 by scanning planted lines on
+# this server rather than assumed. sonar-java: NOSONAR anywhere in a comment, and
+# @SuppressWarnings resolved by type, so `@ SuppressWarnings` and `@java.lang.SuppressWarnings`
+# count. SonarJS: a comment starting with NOSONAR in any case, every ESLint disable directive, and
+# an inline `/* eslint rule: off */` config, which hides an issue without a warning. The CSS
+# analyzer: NOSONAR and stylelint's disable directives. Every form is read in every file: a match
+# stricter than one analyzer's costs a reason, a looser one a silent green.
+SUPPRESSION_WORDS='SuppressWarnings|[Nn][Oo][Ss][Oo][Nn][Aa][Rr]|eslint|stylelint'
+
 # One grep over the changed set, so a Stop pays a process per file only for the files that
 # carry a suppression at all.
 suppressing=""
-if [ -n "$changed" ]; then
-  suppressing=$(cd "$repo" && printf '%s\n' "$changed" | tr '\n' '\0' |
-    LC_ALL=C xargs -0 grep -lE -e '@SuppressWarnings|NOSONAR' -- 2>/dev/null)
+code_changed=$(printf '%s\n' "$changed" | LC_ALL=C grep -vE '[.](md|markdown|txt|rst)$' || true)
+if [ -n "$code_changed" ]; then
+  suppressing=$(cd "$repo" && printf '%s\n' "$code_changed" | tr '\n' '\0' |
+    LC_ALL=C xargs -0 grep -lE -e "$SUPPRESSION_WORDS" -- 2>/dev/null)
 fi
 
 # Prints, as one anchored ERE, the paths the base's root pom keeps out of analysis through
@@ -319,37 +641,55 @@ excluded_paths_ere() {
 if [ -n "$suppressing" ]; then
   excluded=$(excluded_paths_ere) || audit_failed pom.xml
   if [ -n "$excluded" ]; then
-    suppressing=$(printf '%s\n' "$suppressing" | LC_ALL=C grep -vE -e "$excluded")
+    js_part=""
+    [ -z "$js_dir" ] || js_part=$(printf '%s\n' "$suppressing" | LC_ALL=C grep -F -- "$js_dir/" | LC_ALL=C grep -E "^${js_dir//./[.]}/" || true)
+    suppressing=$(
+      printf '%s\n' "$suppressing" | LC_ALL=C grep -vE -e "$excluded"
+      printf '%s\n' "$js_part"
+    )
+    suppressing=$(printf '%s\n' "$suppressing" | grep -v '^$' | sort -u)
   fi
 fi
+
+# Prints `justified` or `unjustified` for a line holding a suppression, nothing for a line that
+# only names one. Each form on the line needs its own reason: NOSONAR a `:`, `-` or `(` and words
+# after it; @SuppressWarnings a `//` comment, and never "all"; an ESLint or stylelint directive
+# its ` -- description`, ESLint's own syntax, which a decrement such as `x--` does not satisfy.
+suppression_verdict() {
+  local line="$1" code="${1%%//*}" found=0 reasoned=1
+  if printf '%s' "$line" | LC_ALL=C grep -qE '@[[:space:]]*(java[.]lang[.])?SuppressWarnings'; then
+    found=1
+    if printf '%s' "$code" | LC_ALL=C grep -qE 'SuppressWarnings[[:space:]]*[(][^)]*"all"' ||
+      ! printf '%s' "$line" | LC_ALL=C grep -qE 'SuppressWarnings.*//[[:space:]]*[^[:space:]]'; then
+      reasoned=0
+    fi
+  fi
+  if printf '%s' "$line" | LC_ALL=C grep -qE '(eslint|stylelint)-disable|/[*][[:space:]]*eslint[[:space:]]'; then
+    found=1
+    printf '%s' "$line" | LC_ALL=C grep -qE '(eslint|stylelint)[^*]*[[:space:]]--+[[:space:]]+[^[:space:]*]' ||
+      reasoned=0
+  fi
+  if printf '%s' "$line" | LC_ALL=C grep -qiE 'nosonar'; then
+    found=1
+    printf '%s' "$line" | LC_ALL=C grep -qiE 'nosonar[[:space:]]*[-:(][[:space:]]*[^[:space:]]' ||
+      reasoned=0
+  fi
+  [ "$found" -eq 1 ] || return 0
+  if [ "$reasoned" -eq 1 ]; then echo justified; else echo unjustified; fi
+}
 
 bad=""
 good=""
 while IFS= read -r f; do
   [ -n "$f" ] && [ -f "$repo/$f" ] || continue
-  found=$(KEEP='@SuppressWarnings|NOSONAR' new_lines "$f") || audit_failed "$f"
+  found=$(KEEP="$SUPPRESSION_WORDS" new_lines "$f") || audit_failed "$f"
   while IFS=$'\t' read -r n text; do
     [ -n "$n" ] || continue
     text="${text#"${text%%[![:space:]]*}"}"
+    verdict=$(suppression_verdict "$text")
+    [ -n "$verdict" ] || continue
     entry="  $f:$n: $text"$'\n'
-    case "$text" in
-      *'@SuppressWarnings'*)
-        if printf '%s' "$text" | LC_ALL=C grep -qE '@SuppressWarnings[[:space:]]*\([[:space:]]*"all"'; then
-          bad="${bad}${entry}"
-        elif printf '%s' "$text" | LC_ALL=C grep -qE '@SuppressWarnings.*//[[:space:]]*[^[:space:]]'; then
-          good="${good}${entry}"
-        else
-          bad="${bad}${entry}"
-        fi
-        ;;
-      *NOSONAR*)
-        if printf '%s' "$text" | LC_ALL=C grep -qE 'NOSONAR[[:space:]]*[-:(][[:space:]]*[^[:space:]]'; then
-          good="${good}${entry}"
-        else
-          bad="${bad}${entry}"
-        fi
-        ;;
-    esac
+    if [ "$verdict" = justified ]; then good="${good}${entry}"; else bad="${bad}${entry}"; fi
   done < <(printf '%s\n' "$found")
 done < <(printf '%s\n' "$suppressing")
 
@@ -359,13 +699,17 @@ refuse_unjustified() {
     printf 'Suppressing is allowed when Sonar is wrong, but the reason goes on the same line:\n' >&2
     printf '  // NOSONAR: <why this rule does not apply here>\n' >&2
     printf '  @SuppressWarnings("java:S1234") // <why>\n' >&2
+    printf '  // eslint-disable-next-line <rule> -- <why>    (stylelint the same)\n' >&2
     printf '@SuppressWarnings("all") is never accepted. Fix the finding or justify it.\n' >&2
   fi
   if [ -n "$pom_bad" ]; then
     printf 'SONAR GATE: Sonar properties that exclude, skip or narrow analysis, added without a reason:\n%s' "$pom_bad" >&2
-    printf 'They hide findings the way NOSONAR does. Give each its reason in an XML comment, on its own\n' >&2
-    printf 'lines or ending just above its block of adjacent suppression properties. The gate accepts them\n' >&2
-    printf 'only in a pom: move any from .mvn/maven.config or .mvn/jvm.config into one.\n' >&2
+    printf 'They hide findings the way NOSONAR does. Give each its reason in a comment: in a pom, an XML\n' >&2
+    printf 'comment on its own lines or ending just above its block of adjacent suppression properties; in\n' >&2
+    printf 'sonar-project.properties, a # line just above it or its block. The gate accepts them only there:\n' >&2
+    printf 'move any from .mvn/maven.config or .mvn/jvm.config into a pom. A rule or value taken out of the\n' >&2
+    printf 'rules file, or a .sonar-gate setting narrowed, needs a new # line there naming it and saying\n' >&2
+    printf 'why; that is the owner'"'"'s call.\n' >&2
   fi
   exit 2
 }
@@ -388,14 +732,16 @@ report_suppressions() {
     printf '%s\n' "$key" >"$reported_file"
 }
 
-if [ -z "$changed" ]; then
+# With scope = project a commit alone can bring a finding into view, so an unchanged diff still
+# scans whenever the fingerprint, which holds the base commit, has moved.
+if [ -z "$changed" ] && [ "$scope" != project ]; then
   report_suppressions
   exit 0
 fi
 
 if [ ! -x "$GATE" ]; then
-  printf 'sonar gate: %s missing or not executable; Sonar checks are OFF\n' "$GATE" >&2
-  exit 1
+  tell_user "Sonar gate: $GATE is missing or not executable; Sonar checks are OFF."
+  exit 0
 fi
 
 counter="${TMPDIR:-/tmp}/claude-sonar-gate-${agent}"
@@ -418,21 +764,52 @@ rounds=$(cat "$counter" 2>/dev/null || echo 0)
 out=$(mktemp "${TMPDIR:-/tmp}/claude-sonar-out.XXXXXX")
 err=$(mktemp "${TMPDIR:-/tmp}/claude-sonar-err.XXXXXX")
 pat=$(mktemp "${TMPDIR:-/tmp}/claude-sonar-files.XXXXXX")
-trap 'rm -f "$out" "$err" "$pat"' EXIT
+trap 'rm -f "$out" "$err" "$pat" "$out.timeout"' EXIT
 printf '%s\n' "$changed" >"$pat"
 
-"$GATE" --project-dir "$repo" --no-boot --files "$pat" >"$out" 2>"$err"
-status=$?
+gate_args=(--project-dir "$repo" --no-boot)
+[ "$scope" = project ] || gate_args+=(--files "$pat")
+timed_out="${out}.timeout"
 
+# Claude Code cancels a Stop hook at its timeout (400 s in settings.json) and discards its
+# output, which would end the turn in silence. The watchdog stops the gate first, whole process
+# group, Maven included, and the timeout is reported like any other failure.
+set -m
+"$GATE" "${gate_args[@]}" >"$out" 2>"$err" &
+gate_pid=$!
+set +m
+(
+  trap 'kill "$nap" 2>/dev/null; exit 0' TERM
+  sleep "$GATE_TIMEOUT" &
+  nap=$!
+  wait "$nap"
+  : >"$timed_out"
+  kill -TERM -- "-$gate_pid" 2>/dev/null
+) &
+watchdog=$!
+trap 'kill -TERM -- "-$gate_pid" 2>/dev/null' TERM INT HUP
+wait "$gate_pid"
+status=$?
+trap - TERM INT HUP
+kill -TERM "$watchdog" 2>/dev/null
+wait "$watchdog" 2>/dev/null
+if [ -e "$timed_out" ]; then
+  rm -f "$timed_out"
+  tell_user "Sonar gate stopped after ${GATE_TIMEOUT}s, before Claude Code's own hook timeout; Sonar checks are OFF for this turn. Run ~/.claude/scripts/sonar-gate.sh --project-dir $repo by hand to see how long it takes."
+  exit 0
+fi
+
+# A Stop hook's exit 1 shows the user only the first line of its stderr, and Claude none of it,
+# so a gate that cannot run reports through a systemMessage, whole.
 if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
-  printf 'sonar gate: could not run (exit %s); Sonar checks are OFF for this turn\n' "$status" >&2
-  cat "$err" >&2
-  exit 1
+  tell_user "Sonar gate could not run (exit $status); Sonar checks are OFF for this turn:"$'\n'"$(tail -20 "$err")"
+  exit 0
 fi
 
 gate_failed=0
 grep -q '^QUALITY GATE: FAILED' "$out" && gate_failed=1
 mine=$(grep -E '^[[:space:]]+[^[:space:]]+:[0-9]+ \[' "$out" || true)
+more=$(grep -E '^[[:space:]]+[.][.][.] and [0-9]+ more' "$out" || true)
 count=$(printf '%s' "$mine" | grep -c . || true)
 
 if [ "$status" -eq 0 ]; then
@@ -445,16 +822,17 @@ printf '%s' "$rounds" >"$counter"
 
 if [ "$rounds" -ge "$MAX_ROUNDS" ]; then
   rm -f "$counter"
-  printf 'sonar gate: still red after %s attempts; not blocking again.\n' "$MAX_ROUNDS" >&2
-  printf 'Report the outstanding findings to the user rather than suppressing them.\n' >&2
-  [ "$gate_failed" -eq 1 ] && grep -A20 '^QUALITY GATE: FAILED' "$out" >&2
-  printf '%s\n' "$mine" >&2
-  exit 1
+  outstanding="$mine"
+  [ -z "$more" ] || outstanding="$outstanding"$'\n'"$more"
+  [ "$gate_failed" -eq 0 ] || outstanding="$(grep -A20 '^QUALITY GATE: FAILED' "$out")"$'\n'"$outstanding"
+  tell_user "Sonar gate: still red after $MAX_ROUNDS attempts, so it stops blocking this turn. Outstanding:"$'\n'"$outstanding"
+  exit 0
 fi
 
 printf 'SONAR GATE: new Sonar findings (attempt %s of %s)\n' "$rounds" "$MAX_ROUNDS" >&2
 [ "$gate_failed" -eq 1 ] && grep -A20 '^QUALITY GATE: FAILED' "$out" >&2
 [ "$count" -gt 0 ] && printf '%s\n' "$mine" >&2
+[ -z "$more" ] || printf '%s\n' "$more" >&2
 [ -n "${good}${pom_good}" ] &&
   printf 'Justified suppression(s) already present, report these:\n%s' "${good}${pom_good}" >&2
 printf 'Fix these, or justify a suppression inline. Do not end the turn dirty.\n' >&2

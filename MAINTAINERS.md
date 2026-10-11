@@ -42,6 +42,105 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **The Sonar gate applies a committed rule set, scans TypeScript and counts duplication**
+  (2026-10-11). Simon's IDE reported 326 issues on PersonalFinance while the gate, run on the
+  whole project, reported 0. The gate counted correctly, but it measured something else:
+  - **Rules.** SonarQube for IDE, standalone, had 42 Java rules switched on beyond Sonar way
+    (S1541 cyclomatic complexity, S138, S1151, S109 and others); the local server ran plain
+    Sonar way. A repo's `.sonar-gate` now names a rules file (`rules = FILE`).
+    `sonar-gate.sh --provision` builds "<repo> way" per language as a child of Sonar way, so
+    Sonar way's own updates still flow in, and assigns it to the project keys. The IDE moves to
+    connected mode on the same server: one rule set, in the repo.
+  - **Drift is refused, every run.** Each listed rule must be active with the listed values and
+    the rule's defaults elsewhere, no unlisted rule activated or overridden, every Sonar way rule
+    still active (a child may deactivate an inherited rule), every other language on the
+    built-in Sonar way, no project key carrying a setting of its own beyond what `.sonar-gate`
+    gives it (an allowlist, so a key a SonarQube release adds is caught too), and nothing that
+    narrows analysis set at instance level, where `sonar.global.exclusions` beats any scanner's
+    value and a component read reports it as inherited. Issues marked accepted or false positive
+    on the server still count, and so does every status but FIXED (`IN_SANDBOX` included). A
+    rule listed with parameters other than Sonar way's is refused as an `override`, with its
+    values, and the hook asks a reason for any rule line added with parameters. Security
+    hotspots are read from their own API too; on 26.8 a planted S2245 came back as an issue, and
+    the hotspots API held nothing apart. The review loop found each of these holes in an earlier
+    version.
+  - **The IDE's scope comes from the server.** In connected mode it reads only server-side
+    exclusions, never a pom's or Git's ignores, so it counted the generated jOOQ, OpenAPI and
+    TypeScript code the gate skips: 627 issues against the gate's 317, then 316 once
+    `ide-exclusions` reached it. That setting is provisioned as `sonar.exclusions` alone on the
+    first project key, the one the IDE binds to. The root pom's own `sonar.exclusions` overrides
+    it in the gate's Maven scan, and the gate refuses to run when the pom sets none (read with
+    `xmllint`). `sonar.test.exclusions` is not provisioned: the pom sets none, so it would have
+    reached the gate's Java tests. The IDE re-reads server settings only when it re-syncs: unbind
+    and bind the project to force it.
+  - **A narrowed rules file or `.sonar-gate` blocks.** A rule or value taken out of the rules
+    file, or in `.sonar-gate` the JS project or rules file changed or dropped, scope moved off
+    `project`, or an IDE exclusion added, needs a `#` line added in the same change naming it and
+    why. The base's comments justify nothing, and a rule or setting commented out is not its own
+    reason: dropping `rules` alone would switch every server-side check off.
+  - **The suppression vocabulary is measured, not assumed.** Copying Java's `NOSONAR` to
+    TypeScript let `// nosonar` through. Planted lines scanned on this server showed SonarJS
+    honouring a comment starting with NOSONAR in any case (not one in mid-comment), every ESLint
+    disable directive, and an inline `/* eslint rule: off */` config, which hides an issue with no
+    warning at all; the CSS analyzer honours NOSONAR and stylelint's directives; sonar-java
+    resolves `@SuppressWarnings` by type, so `@ SuppressWarnings` and the qualified form count.
+    The audit reads every form in every file, and each needs its reason (an ESLint or stylelint
+    one, its ` -- description`).
+  - **Hand-rolled readers are checked against real ones.** The pom audit's count of Sonar
+    properties must equal `xmllint`'s, or the change is refused: a CDATA section holding `<!--`
+    hid a property Maven read. A `.properties` line ends at LF, CRLF or a lone CR, and a
+    continuation drops its leading spaces, as `properties-file` reads them.
+  - **A changed pom goes to the gate**: the Maven scan analyses each module's pom.xml.
+  - **Every Sonar property in a pom, a `sonar-project.properties` or `.mvn/*.config` needs its
+    reason**, not a list of the narrowing ones. `sonar.lang.patterns.<lang>` drops a language from
+    analysis and `sonar.java.source` disables version-gated rules; the review loop's third pass
+    found both passing the list. Only new or changed properties are audited, so this costs one
+    comment per Sonar property added.
+  - **TypeScript was never scanned.** The Maven scanner reads Maven modules only, and the hook
+    triggered on `*.java` alone. `js-project = DIR` adds a second project key, scanned with a
+    pinned `@sonar/scan`, and the hook's file set takes in that directory's sources.
+  - **Duplication is a measure, not an issue**, so a gate counting issues never saw it. Each
+    duplicated block in main code is now a finding, with its partner's location.
+  - **`scope = project`** blocks on any finding anywhere. It answers the open question about
+    commits on the base branch for the repos that set it.
+  - **Failures** used to exit 1 with stderr, which shows the user only its first line and Claude
+    none of it (hooks reference, checked this day). They now reach the user whole as a
+    systemMessage, as does a gate still red after three rounds.
+  - **Tokens left argv.** curl reads `user =` from a config on stdin, and both scanners take
+    `SONAR_TOKEN` from the environment. `test_hooks.py` pins that no token reaches a command
+    line.
+  - **Reads use the administrator's user token** when the Keychain holds one
+    (`sonar-local-admin-token`). The analysis token still runs the scans, but the measures and
+    duplications APIs refuse it for want of Browse permission. *Rejected:* a dedicated
+    non-admin reader account. It would mean one more account and token to set up, on a
+    localhost-only server where `--provision` needs the admin token anyway. What that token
+    could do to the gate's verdict (accept issues, set exclusions, loosen the profile) is what
+    the drift checks above refuse. Revisit if the server ever serves more than this machine.
+  - **Findings come from the analysis they were scanned for.** After reading them, the gate checks
+    each project's latest analysis is still the one it scanned or cached, and fails otherwise.
+  - **Freshness.** A project whose inputs match its last analysis from here is read, not
+    rebuilt: the commit, the diff and untracked files under its paths, the rules file and
+    `.sonar-gate`, the script, the server's version and the profiles' stamps. The record in
+    `$TMPDIR` holds the analysis key its own task produced (`api/ce/task`'s `analysisId`), so
+    another run's analysis never passes for it. A Java-only change no longer re-scans the
+    TypeScript, and the reverse. Both projects cold take 2 min 18 s here.
+  - **The scanners run without the environment that carries properties**: every `SONAR*` and
+    `npm_config_sonar*` variable, `MAVEN_OPTS` and `MAVEN_ARGS` are unset (the npm scanner reads
+    `SONAR_SCANNER_*` and a JSON variable as properties, per its source). The npm scanner runs
+    from the gate's scratch directory with `sonar.projectBaseDir`, so no project `.npmrc` reaches
+    it. User-level `~/.m2/settings.xml` and `~/.npmrc` are the owner's and stay in effect.
+  - **A watchdog stops the gate at 360 s**, whole process group, Maven included, before Claude
+    Code's 400 s hook timeout would discard the hook's output; the user is told. A signal aimed at
+    the hook is forwarded to that group. Every API call is bounded at 60 s.
+  - **The JS project counts whole.** The hook lists any changed file under `js-project`, since
+    its analyzer reads `.mts`, `.cts`, `.html` and more; the NOSONAR audit reads every changed
+    file but prose, and the root pom's exclusions exempt none of the JS project's. In its
+    `sonar-project.properties` a size cap (`maxFileSize`, `filesize.limit`) is audited like an
+    exclusion, and an escaped key is refused outright, since the scanner decodes it.
+
+  Measured on PersonalFinance right after: 323 findings, 317 issues and 6 duplicated blocks,
+  where the gate had said 0. The backlog is plan step 0.8b there.
+
 - **The maintainer notes left `AGENTS.md`, which loaded far beyond `~/.claude`**
   (2026-10-11). The 09-24 entry kept this file as `AGENTS.md` on the finding that it loaded
   in sessions started in `~/.claude`. Since v2.1.277, Claude Code reads `AGENTS.md` directly
@@ -536,7 +635,9 @@ says explicitly that the external reviewer was skipped — no retry loop.
   no remote, where work lands directly on `main`, the fork point is `HEAD`. A mid-turn
   commit therefore takes a red file out of the diff, and the gate never looks at it again.
   Nothing guards this. Sessions commit only when asked, and PersonalFinance's steps run
-  the gate before committing.
+  the gate before committing. *Answered 2026-10-11 for repos that set `scope = project` in
+  `.sonar-gate`:* the base commit is in the fingerprint and the whole project is counted, so a
+  commit cannot take a finding out of view. Under `scope = changed` it still can.
 - **Test-running discipline**: the reviewer can run tests, but the invoking session is
   responsible for green tests before invocation. Whether the reviewer re-runs them is
   non-deterministic. Acceptable; revisit if review latency becomes a concern.

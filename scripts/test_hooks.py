@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -421,6 +422,7 @@ def test_session_rules() -> None:
 STRICT_MKTEMP = """#!/bin/bash
 case "${1:-}" in
   "${TMPDIR%/}"/*X) exec /usr/bin/mktemp "$@" ;;
+  -d) case "${2:-}" in "${TMPDIR%/}"/*X) exec /usr/bin/mktemp "$@" ;; esac ;;
 esac
 printf '%s\\n' "$*" >>"$STUB_MKTEMP_LOG"
 printf 'mktemp stub: refused %s\\n' "$*" >&2
@@ -460,6 +462,10 @@ while [ $# -gt 0 ]; do
 done
 printf '%s\\n' "$files" >>"$STUB_GATE_LOG"
 [ -z "${STUB_GATE_EDIT:-}" ] || printf 'class Late {}\\n' >"$dir/$STUB_GATE_EDIT"
+if [ -n "${STUB_GATE_SLEEP:-}" ]; then
+  ( sleep "$STUB_GATE_SLEEP"; : >"$STUB_GATE_FINISHED" ) &
+  wait
+fi
 exit "${STUB_GATE_EXIT:-0}"
 """
 
@@ -543,7 +549,7 @@ def test_sonar_gate() -> None:
         check(f"sonar-gate: {name}", code == want_exit and len(calls()) == want_calls,
               f"exit {code}, {len(calls())} calls, expected exit {want_exit}, {want_calls} calls")
     check("sonar-gate: --files lists the committed and the untracked java files",
-          calls()[3:4] == [[app, new]], repr(calls()[3:4]))
+          calls()[3:4] == [["pom.xml", app, new]], repr(calls()[3:4]))
     check("sonar-gate: the fingerprint lives in TMPDIR",
           any(p.name.startswith("claude-sonar-fp-") for p in tmp.iterdir()))
 
@@ -706,9 +712,11 @@ def test_sonar_gate() -> None:
         ("a Sonar property in .mvn/maven.config blocks: only a pom is accepted",
          ".mvn/maven.config", "-Dsonar.coverage.exclusions=**/*\n", 2,
          [".mvn/maven.config:1:"]),
-        ("a Sonar property that hides nothing passes silently", "pom.xml",
-         pom("    <sonar.projectName>x</sonar.projectName>\n"
-             "    <sonar.scm.exclusions.disabled>true</sonar.scm.exclusions.disabled>\n"), 0, []),
+        ("any Sonar property needs a reason, not only the ones that look narrowing", "pom.xml",
+         pom("    <sonar.lang.patterns.java>**/*.none</sonar.lang.patterns.java>\n"), 2,
+         ["pom.xml:3: <sonar.lang.patterns.java>"]),
+        ("a property that is not Sonar's passes silently", "pom.xml",
+         pom("    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>\n"), 0, []),
         ("a generated pom copy is not audited", "dependency-reduced-pom.xml",
          pom("    <sonar.exclusions>**/App.java</sonar.exclusions>\n"), 0, []),
         ("a module pom is audited", "backend/pom.xml",
@@ -742,7 +750,10 @@ def test_sonar_gate() -> None:
         before = len(calls())
         proc = stop(repo)
         where = proc.stderr if want_exit == 2 else shown(proc)
-        ok = (proc.returncode == want_exit and len(calls()) == before
+        # A pom is a source the Maven scan reads, so a passing change to one is scanned; a
+        # refusal comes before any scan.
+        scans = 1 if want_exit == 0 and path.split("/")[-1] == "pom.xml" else 0
+        ok = (proc.returncode == want_exit and len(calls()) == before + scans
               and all(w in where for w in want_shown)
               and (bool(want_shown) or proc.stdout == ""))
         check(f"sonar-gate: {name}", ok,
@@ -887,6 +898,307 @@ def test_sonar_gate() -> None:
           proc.returncode == 2 and "late/G.java:1:" in proc.stderr,
           f"exit {proc.returncode}, stderr {proc.stderr[:300]!r}")
 
+    # A TypeScript project named in .sonar-gate: its sources join the file set, its NOSONAR lines
+    # the audit, and its sonar-project.properties is held to the pom rule.
+    repo = new_repo("web", "main")
+    props = "web/sonar-project.properties"
+    committed_props = "# Generated API types.\nsonar.exclusions=src/gen/**\n"
+    put(repo / ".sonar-gate", "js-project = web\n")
+    put(repo / props, committed_props)
+    ts = "web/src/a.ts"
+    put(repo / ts, "export const a = 1;\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "web")
+    put(repo / ts, "export const a = 2;\n")
+    before = len(calls())
+    proc = stop(repo)
+    check("sonar-gate: an edited TypeScript file re-scans, listed in --files",
+          proc.returncode == 0 and calls()[before:] == [[ts]],
+          f"exit {proc.returncode}, calls {calls()[before:]}")
+    put(repo / ts, "export const a = 3; // NOSONAR\n")
+    proc = stop(repo)
+    check("sonar-gate: a bare NOSONAR in TypeScript blocks",
+          proc.returncode == 2 and f"{ts}:1:" in proc.stderr,
+          f"exit {proc.returncode}, stderr {proc.stderr[:200]!r}")
+    put(repo / ts, "export const a = 3; // NOSONAR: fixture reason\n")
+    proc = stop(repo)
+    check("sonar-gate: a TypeScript NOSONAR with its reason passes and is reported",
+          proc.returncode == 0 and f"{ts}:1:" in shown(proc),
+          f"exit {proc.returncode}, stdout {proc.stdout[:200]!r}")
+    props_cases = [
+        ("an uncommented exclusion in sonar-project.properties blocks",
+         committed_props + "\nsonar.coverage.exclusions=**/*\n", 2,
+         f"{props}:4: sonar.coverage.exclusions=**/*"),
+        ("# lines just above justify a properties exclusion, and the report shows them whole",
+         committed_props + "# Coverage is not\n# measured.\nsonar.coverage.exclusions=**/*\n", 0,
+         "(reason: Coverage is not measured.)"),
+        ("a property just below a justified one borrows its reason, visibly",
+         committed_props + "sonar.cpd.exclusions=**/*\n", 0,
+         f"{props}:3: sonar.cpd.exclusions=**/* (reason: Generated API types.)"),
+        ("a value continued over two lines is one property",
+         committed_props + "\nsonar.test.inclusions=a,\\\n  b\n", 2,
+         f"{props}:4: sonar.test.inclusions=a,b"),
+        ("a file-size cap in sonar-project.properties narrows analysis, so it blocks",
+         committed_props + "\nsonar.javascript.maxFileSize=1\n", 2,
+         f"{props}:4: sonar.javascript.maxFileSize=1"),
+        ("an escaped key blocks, whatever it decodes to",
+         committed_props + "# Fixture reason.\nsonar\\u002eexclusions=**/*\n", 2,
+         "an escaped key"),
+        ("a comment ending in a backslash continues nothing: the exclusion under it is audited",
+         committed_props + "\n# fixture \\\nsonar.coverage.exclusions=**/*\n", 0,
+         f"{props}:5: sonar.coverage.exclusions=**/* (reason: fixture"),
+        ("any Sonar key in sonar-project.properties needs a reason",
+         committed_props + "\nsonar.lang.patterns.ts=**/*.none\n", 2,
+         f"{props}:4: sonar.lang.patterns.ts=**/*.none"),
+    ]
+    for name, text, want_exit, want in props_cases:
+        reset(repo)
+        put(repo / props, text)
+        proc = stop(repo)
+        where = proc.stderr if want_exit == 2 else shown(proc)
+        check(f"sonar-gate: {name}",
+              proc.returncode == want_exit and want in where and (want or proc.stdout == ""),
+              f"exit {proc.returncode}, stdout {proc.stdout[:200]!r}, stderr {proc.stderr[:200]!r}")
+
+    # scope = project: a commit alone moves the fingerprint, and the gate counts the whole project.
+    repo = new_repo("whole", "main")
+    put(repo / ".sonar-gate", "scope = project\n")
+    git(repo, "commit", "-q", "-am", "whole project")
+    before = len(calls())
+    first, second = stop(repo), stop(repo)
+    check("sonar-gate: scope = project scans after a commit, with no --files, once",
+          first.returncode == 0 and second.returncode == 0 and calls()[before:] == [[]],
+          f"exits {first.returncode}/{second.returncode}, calls {calls()[before:]}")
+    put(repo / ".sonar-gate", "scope = everything\n")
+    before = len(calls())
+    proc = stop(repo)
+    check("sonar-gate: an unknown scope turns the gate OFF, loudly",
+          proc.returncode == 0 and len(calls()) == before and "OFF" in shown(proc),
+          f"exit {proc.returncode}, stdout {proc.stdout[:200]!r}")
+
+    # Failures reach the user whole, through a systemMessage: a Stop hook's exit 1 would show
+    # only the first line of its stderr.
+    repo = new_repo("failing", "main")
+    put(repo / app, "class App { int down; }\n")
+    proc = stop(repo, 1)
+    check("sonar-gate: a gate that cannot run says so to the user and does not block",
+          proc.returncode == 0 and "could not run" in shown(proc) and "OFF" in shown(proc),
+          f"exit {proc.returncode}, stdout {proc.stdout[:200]!r}")
+    codes = [stop(repo, 2) for _ in range(3)]
+    last = stop(repo, 2)
+    check("sonar-gate: after three red rounds the gate stops blocking and tells the user",
+          [p.returncode for p in codes] == [2, 2, 0] and "still red" in shown(codes[2])
+          and last.returncode == 2,
+          f"exits {[p.returncode for p in codes]} then {last.returncode}, "
+          f"third stdout {codes[2].stdout[:200]!r}")
+
+    # The JS project counts whole: its analyzer reads .mts and more, and a README that names
+    # NOSONAR in prose is no suppression.
+    repo = new_repo("web-whole", "main")
+    put(repo / ".sonar-gate", "js-project = web\n")
+    put(repo / "web/sonar-project.properties", "sonar.projectName=x\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "web")
+    put(repo / "web/vitest.config.mts", "export default {};\n")
+    put(repo / "web/README.md", "Never add a bare NOSONAR.\n")
+    before = len(calls())
+    proc = stop(repo)
+    check("sonar-gate: an .mts file is listed, and prose naming NOSONAR is not audited",
+          proc.returncode == 0 and calls()[before:] == [["web/README.md", "web/vitest.config.mts"]],
+          f"exit {proc.returncode}, calls {calls()[before:]}, stderr {proc.stderr[:200]!r}")
+
+    # Every form the analyzers take as a suppression, as measured on the server: SonarJS takes a
+    # comment starting with NOSONAR in any case, ESLint directives and inline ESLint config; the
+    # CSS analyzer stylelint directives; sonar-java @SuppressWarnings by type.
+    repo = new_repo("vocabulary", "main")
+    put(repo / ".sonar-gate", "js-project = web\n")
+    put(repo / "web/sonar-project.properties", "sonar.projectName=x\n")
+    put(repo / "web/src/a.ts", "export const a = 1;\n")
+    put(repo / "web/src/a.css", ".a { color: red; }\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "vocabulary")
+    java_line = "class App { int v; }"
+    vocabulary = [
+        ("a lower-case nosonar blocks", "web/src/a.ts", "export const b = 1; // nosonar\n", 2),
+        ("a block-comment NoSonar blocks", "web/src/a.ts", "export const b = 1; /* NoSonar */\n", 2),
+        ("a nosonar with its reason passes", "web/src/a.ts",
+         "export const b = 1; // nosonar: fixture reason\n", 0),
+        ("an eslint-disable-next-line blocks", "web/src/a.ts",
+         "// eslint-disable-next-line\nexport const b = 1;\n", 2),
+        ("an eslint-disable-line naming a rule blocks without a description", "web/src/a.ts",
+         "export const b = 1; // eslint-disable-line no-eval\n", 2),
+        ("an ESLint directive with its -- description passes", "web/src/a.ts",
+         "// eslint-disable-next-line no-eval -- fixture reason\nexport const b = 1;\n", 0),
+        ("a decrement is no ESLint description", "web/src/a.ts",
+         "let c = 2; c--; // eslint-disable-line\n", 2),
+        ("a file-wide eslint-disable blocks", "web/src/a.ts", "/* eslint-disable */\nexport const b = 1;\n", 2),
+        ("an inline ESLint rule config blocks", "web/src/a.ts",
+         "/* eslint no-eval: off */\nexport const b = 1;\n", 2),
+        ("a stylelint directive blocks", "web/src/a.css",
+         "/* stylelint-disable-next-line */\n.b {}\n", 2),
+        ("a CSS NOSONAR blocks", "web/src/a.css", ".b {} /* NOSONAR */\n", 2),
+        ("prose naming ESLint is no suppression", "web/src/a.ts",
+         "// ESLint cannot see this one.\nexport const b = 1;\n", 0),
+        ("a spaced @ SuppressWarnings blocks", "src/main/java/App.java",
+         '@ SuppressWarnings("java:S1")\n' + java_line + "\n", 2),
+        ("a qualified @java.lang.SuppressWarnings blocks", "src/main/java/App.java",
+         '@java.lang.SuppressWarnings("java:S1")\n' + java_line + "\n", 2),
+        ("a qualified @java.lang.SuppressWarnings with its reason passes", "src/main/java/App.java",
+         '@java.lang.SuppressWarnings("java:S1") // fixture reason\n' + java_line + "\n", 0),
+        ("\"all\" in braces blocks, reason or not", "src/main/java/App.java",
+         '@SuppressWarnings({ "all" }) // fixture reason\n' + java_line + "\n", 2),
+    ]
+    for name, path, text, want_exit in vocabulary:
+        reset(repo)
+        put(repo / path, text)
+        proc = stop(repo)
+        check(f"sonar-gate: {name}",
+              proc.returncode == want_exit and (want_exit == 0 or f"{path}:" in proc.stderr),
+              f"exit {proc.returncode}, stderr {proc.stderr[:300]!r}")
+
+    # The hand-rolled readers against what Maven and properties-file read.
+    reset(repo)
+    put(repo / "pom.xml", pom("    <description><![CDATA[<!--]]></description>\n"
+                              "    <sonar.exclusions>src/**</sonar.exclusions>\n"
+                              "    <!-- -->\n"))
+    proc = stop(repo)
+    check("sonar-gate: a pom whose Sonar properties the audit counts apart from xmllint blocks",
+          proc.returncode == 2 and "Maven reads 1 Sonar properties, the audit 0" in proc.stderr,
+          f"exit {proc.returncode}, stderr {proc.stderr[:300]!r}")
+    for name, text, want in [
+        ("a key split over a continuation line is still its key",
+         "sonar.projectName=x\n\nsonar.\\\n    exclusions=src/**\n",
+         "web/sonar-project.properties:3: sonar.exclusions=src/**"),
+        ("a lone carriage return ends a properties line",
+         "sonar.projectName=x\n\nfoo=1\rsonar.exclusions=src/**\n", "sonar.exclusions=src/**"),
+    ]:
+        reset(repo)
+        put(repo / "web/sonar-project.properties", text)
+        proc = stop(repo)
+        check(f"sonar-gate: {name}", proc.returncode == 2 and want in proc.stderr,
+              f"exit {proc.returncode}, stderr {proc.stderr[:300]!r}")
+
+    # The Maven scan analyses each pom, so a changed pom is listed for the gate.
+    reset(repo)
+    put(repo / "pom.xml", "<project><!-- TODO --></project>\n")
+    before = len(calls())
+    proc = stop(repo)
+    check("sonar-gate: a changed pom is listed for the gate", calls()[before:] == [["pom.xml"]],
+          f"exit {proc.returncode}, calls {calls()[before:]}")
+
+    # A rule or a value taken out of the rules file narrows the gate: it needs a reason, written
+    # in a comment added with the change.
+    repo = new_repo("rules", "main")
+    rules_text = "# java:S2 is noisy, a header says.\njava:S1\njava:S2 max=3\n"
+    put(repo / ".sonar-gate", "rules = rules.txt\n")
+    put(repo / "rules.txt", rules_text)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "rules")
+    rules_cases = [
+        ("a rule taken out of the rules file blocks", rules_text.replace("java:S2 max=3\n", ""), 2,
+         "rules.txt: java:S2 max=3 (taken out or changed)"),
+        ("a value changed in the rules file blocks", rules_text.replace("max=3", "max=9"), 2,
+         "rules.txt: java:S2 max=3 (taken out or changed)"),
+        ("an old comment naming the rule justifies nothing", rules_text.replace("java:S1\n", ""), 2,
+         "rules.txt: java:S1 (taken out or changed)"),
+        ("a comment naming another rule that starts alike justifies nothing",
+         rules_text.replace("java:S1\n", "# java:S10 goes: fixture reason\n"), 2,
+         "rules.txt: java:S1 (taken out or changed)"),
+        ("a new comment naming the rule justifies taking it out, and the report shows it",
+         rules_text.replace("java:S2 max=3\n", "# java:S2 dropped: fixture reason\n"), 0,
+         "(reason: java:S2 dropped: fixture reason)"),
+        ("a rule commented out is not its own reason",
+         rules_text.replace("java:S2 max=3\n", "# java:S2 max=3    # was here\n"), 2,
+         "rules.txt: java:S2 max=3 (taken out or changed)"),
+        ("a rule added to the rules file passes silently", rules_text + "java:S3\n", 0, ""),
+        ("a rule added with parameters needs a reason: they may override Sonar way's",
+         rules_text + "java:S3776 Threshold=1000\n", 2,
+         "rules.txt: java:S3776 Threshold=1000 (added with parameters"),
+        ("a rule added with parameters and its reason passes, and the report shows it",
+         rules_text + "# java:S3776 at 1000: fixture reason\njava:S3776 Threshold=1000\n", 0,
+         "(reason: java:S3776 at 1000: fixture reason)"),
+    ]
+    for name, text, want_exit, want in rules_cases:
+        reset(repo)
+        put(repo / "rules.txt", text)
+        proc = stop(repo)
+        where = proc.stderr if want_exit == 2 else shown(proc)
+        check(f"sonar-gate: {name}",
+              proc.returncode == want_exit and want in where and (want or proc.stdout == ""),
+              f"exit {proc.returncode}, stdout {proc.stdout[:200]!r}, stderr {proc.stderr[:200]!r}")
+
+    # .sonar-gate narrows the gate too: the JS project or the rules dropped, scope moved off
+    # project, an IDE exclusion added. Each needs a reason written with the change.
+    repo = new_repo("gate-file", "main")
+    gate_text = "rules = rules.txt\njs-project = web\nscope = project\nide-exclusions = gen/**\n"
+    put(repo / ".sonar-gate", gate_text)
+    put(repo / "rules.txt", "java:S1\n")
+    put(repo / "web/sonar-project.properties", "sonar.projectName=x\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "gate settings")
+    gate_cases = [
+        ("dropping the JS project blocks", gate_text.replace("js-project = web\n", ""), 2,
+         '.sonar-gate: js-project web is now ""'),
+        ("dropping the rules file blocks", gate_text.replace("rules = rules.txt\n", ""), 2,
+         '.sonar-gate: rules rules.txt is now ""'),
+        ("moving scope off project blocks", gate_text.replace("scope = project", "scope = changed"),
+         2, '.sonar-gate: scope project is now "changed"'),
+        ("adding an IDE exclusion blocks", gate_text.replace("gen/**", "gen/**, src/**"), 2,
+         ".sonar-gate: ide-exclusions adds src/**"),
+        ("a new comment naming the setting justifies it, and the report shows it",
+         "# js-project goes: fixture reason\n" + gate_text.replace("js-project = web\n", ""), 0,
+         "(reason: js-project goes: fixture reason)"),
+        ("commenting out the rules file is not its own reason",
+         gate_text.replace("rules = rules.txt", "# rules = rules.txt"), 2,
+         '.sonar-gate: rules rules.txt is now ""'),
+        ("commenting out the JS project is not its own reason",
+         gate_text.replace("js-project = web", "# js-project = web"), 2,
+         '.sonar-gate: js-project web is now ""'),
+        ("commenting out scope is not its own reason",
+         gate_text.replace("scope = project", "# scope = project"), 2,
+         '.sonar-gate: scope project is now ""'),
+        ("a setting that widens passes silently",
+         gate_text.replace("ide-exclusions = gen/**\n", ""), 0, ""),
+    ]
+    for name, text, want_exit, want in gate_cases:
+        reset(repo)
+        put(repo / ".sonar-gate", text)
+        proc = stop(repo)
+        where = proc.stderr if want_exit == 2 else shown(proc)
+        check(f"sonar-gate: {name}",
+              proc.returncode == want_exit and want in where and (want or proc.stdout == ""),
+              f"exit {proc.returncode}, stdout {proc.stdout[:200]!r}, stderr {proc.stderr[:300]!r}")
+
+    # The root pom's exclusions say nothing about the JS project's files.
+    repo = new_repo("web-exempt", "main")
+    put(repo / ".sonar-gate", "js-project = web\n")
+    put(repo / "pom.xml", pom("    <!-- Generated code. -->\n"
+                              "    <sonar.exclusions>**/gen/**</sonar.exclusions>\n"))
+    put(repo / "web/sonar-project.properties", "sonar.projectName=x\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "exclusions")
+    put(repo / "web/src/gen/a.ts", "export const a = 1; // NOSONAR\n")
+    proc = stop(repo)
+    check("sonar-gate: the root pom's exclusions exempt no JS file from the NOSONAR audit",
+          proc.returncode == 2 and "web/src/gen/a.ts:1:" in proc.stderr,
+          f"exit {proc.returncode}, stderr {proc.stderr[:300]!r}")
+
+    # A gate that would outlast Claude Code's hook timeout is stopped first, Maven and all, and
+    # the user is told.
+    repo = new_repo("slow", "main")
+    put(repo / app, "class App { int slow; }\n")
+    finished = fx / "slow-gate-finished"
+    started = time.monotonic()
+    proc = stop(repo, CLAUDE_SONAR_GATE_TIMEOUT="1", STUB_GATE_SLEEP="4",
+                STUB_GATE_FINISHED=str(finished))
+    elapsed = time.monotonic() - started
+    time.sleep(5)
+    check("sonar-gate: a gate past its time is stopped, the user told, and nothing outlives it",
+          proc.returncode == 0 and "stopped after 1s" in shown(proc) and elapsed < 4
+          and not finished.exists(),
+          f"exit {proc.returncode}, {elapsed:.1f}s, finished {finished.exists()}, "
+          f"stdout {proc.stdout[:200]!r}")
+
     repo = new_repo("unborn", "main", commit=False)
     before = len(calls())
     codes = [stop(repo).returncode, stop(repo).returncode]
@@ -902,6 +1214,8 @@ def test_sonar_gate() -> None:
 # no SonarQube is needed. TMPDIR is a fixture directory, held to by the strict mktemp. A green answer is cached, so the gate must never give one for an
 # analysis it did not wait for.
 STUB_MVNW = """#!/bin/bash
+printf '%s\\n' "$*" >>"${STUB_ARGV_LOG:-/dev/null}"
+printf 'opts=%s\\n' "${MAVEN_OPTS-unset}" >>"${STUB_MVNW_ENV_LOG:-/dev/null}"
 root=$(cd "$(dirname "$0")" && pwd)
 case " $* " in
   *" clean "*) rm -rf "$root/target" ;;
@@ -914,17 +1228,102 @@ esac
 exit 0
 """
 STUB_CURL = r"""#!/bin/bash
+printf '%s\n' "$*" >>"${STUB_ARGV_LOG:-/dev/null}"
+case " $* " in *" -K - "*) cat >/dev/null ;; esac
 page=1
-for a in "$@"; do case "$a" in p=*) page=${a#p=} ;; esac; done
-issues() { # $1 total, $2 count, $3 path, $4 rule
+lang=""
+key=""
+for a in "$@"; do
+  case "$a" in
+    p=*) page=${a#p=} ;;
+    language=*) lang=${a#language=} ;;
+    component=* | key=* | project=* | projectKey=*) key=${a#*=} ;;
+  esac
+done
+project=${key%%:*}
+issues() { # $1 total, $2 count, $3 path, $4 rule, [$5 project key], [$6 issue status]
   /usr/bin/jq -n --argjson t "$1" --argjson n "$2" --arg f "$3" --arg r "$4" \
-    '{paging: {total: $t}, issues: [range($n) | {component: ("local-project:" + $f),
-      rule: $r, message: "fixture", line: 7}]}'
+    --arg k "${5:-local-project}" --arg s "${6:-OPEN}" \
+    '{paging: {total: $t}, issues: [range($n) | {component: ($k + ":" + $f),
+      rule: $r, message: "fixture", line: 7, issueStatus: $s}]}'
+}
+# One profile per language, as the server answers a project's: ours where STUB_ASSIGNED says pf,
+# the built-in Sonar way otherwise, and xml on STUB_XML_PROFILE.
+project_profiles() {
+  /usr/bin/jq -n -c --arg assigned "${STUB_ASSIGNED:-pf}" --arg lang "$lang" \
+    --arg xml "${STUB_XML_PROFILE:-Sonar way}" --arg updated "${STUB_RULES_UPDATED:-t1}" '
+    [ {language: "java", key: $assigned,
+       name: (if $assigned == "pf" then "ruled way" else "Sonar way" end),
+       isBuiltIn: ($assigned != "pf"), rulesUpdatedAt: $updated},
+      {language: "xml", key: "xml-profile", name: $xml, isBuiltIn: ($xml == "Sonar way"),
+       rulesUpdatedAt: $updated} ]
+    | {profiles: map(select($lang == "" or .language == $lang))}'
 }
 case "$*" in
   */api/system/status*) echo '{"status":"UP"}' ;;
-  */api/ce/task*) printf '{"task":{"status":"%s"}}\n' "$STUB_CE_STATUS" ;;
+  */api/server/version*) echo "${STUB_SERVER_VERSION:-26.8}" ;;
+  */api/qualityprofiles/search*)
+    case "$*" in
+      *"qualityProfile=Sonar way"*)
+        printf '{"profiles":[{"key":"sw","name":"Sonar way","language":"%s","isBuiltIn":true}]}\n' "$lang" ;;
+      *qualityProfile=*)
+        if [ -n "${STUB_PROFILE:-}" ]; then
+          printf '{"profiles":[{"key":"pf","name":"ruled way","language":"%s","parentKey":"%s"}]}\n' \
+            "$lang" "${STUB_PARENT:-sw}"
+        else
+          echo '{"profiles":[]}'
+        fi ;;
+      *) project_profiles ;;
+    esac ;;
+  */api/rules/search*)
+    case "$*" in
+      *qprofile=sw*) actives="${STUB_PARENT_ACTIVES:-}" ;;
+      *) actives="${STUB_ACTIVES:-}" ;;
+    esac
+    [ -n "$actives" ] || actives='{}'
+    rules="${STUB_RULES:-}"
+    [ -n "$rules" ] || rules='[{"key":"x"}]'
+    printf '{"total":1,"rules":%s,"actives":%s}\n' "$rules" "$actives" ;;
+  */api/settings/values*)
+    case "$*" in
+      *component=*) settings="${STUB_SETTINGS:-}" ;;
+      *) settings="${STUB_INSTANCE_SETTINGS:-}" ;;
+    esac
+    [ -n "$settings" ] || settings='{"settings":[]}'
+    echo "$settings" ;;
+  */api/project_analyses/search*)
+    latest="${STUB_ANALYSIS:-a1}"
+    if [ -n "${STUB_ANALYSIS_AFTER_READ:-}" ] && [ -e "${STUB_READ_MARK:-/nonexistent}" ]; then
+      latest="$STUB_ANALYSIS_AFTER_READ"
+    fi
+    printf '{"analyses":[{"key":"%s"}]}\n' "$latest" ;;
+  */api/measures/component_tree*)
+    case "${STUB_DUPS:-}" in
+      one) /usr/bin/jq -n -c --arg k "$project" --arg f "${STUB_DUP_PATH:-src/main/java/App.java}" \
+             '{paging: {total: 1}, components: [{key: ($k + ":" + $f),
+               measures: [{metric: "duplicated_blocks", value: "1"}]}]}' ;;
+      *) echo '{"paging":{"total":0},"components":[]}' ;;
+    esac ;;
+  */api/duplications/show*)
+    /usr/bin/jq -n -c --arg self "$key" \
+      --arg other "$project:${STUB_DUP_PARTNER:-src/main/java/Other.java}" \
+      '{duplications: [{blocks: [{from: 3, size: 10, _ref: "1"}, {from: 20, size: 10, _ref: "2"}]}],
+        files: {"1": {key: $self}, "2": {key: $other}}}' ;;
+  */api/hotspots/search*)
+    case "${STUB_HOTSPOTS:-}" in
+      two) /usr/bin/jq -n -c --arg k "$project" '{paging: {total: 2}, hotspots: [
+             {component: ($k + ":src/main/java/App.java"), line: 9, message: "fixture hotspot",
+              ruleKey: "java:S2245", status: "TO_REVIEW"},
+             {component: ($k + ":src/main/java/App.java"), line: 11, message: "fixture safe",
+              ruleKey: "java:S2245", status: "REVIEWED", resolution: "SAFE"},
+             {component: ($k + ":src/Other.java"), line: 3, message: "fixture elsewhere",
+              ruleKey: "java:S2245", status: "TO_REVIEW"}]}' ;;
+      *) echo '{"paging":{"total":0},"hotspots":[]}' ;;
+    esac ;;
+  */api/ce/task*)
+    printf '{"task":{"status":"%s","analysisId":"%s"}}\n' "$STUB_CE_STATUS" "${STUB_ANALYSIS:-a1}" ;;
   */api/issues/search*)
+    [ -z "${STUB_READ_MARK:-}" ] || : >"$STUB_READ_MARK"
     case "${STUB_ISSUES:-}:$page" in
       paged:1) issues 501 500 src/Other.java java:S1 ;;
       paged:2) issues 501 1 src/main/java/App.java java:S2 ;;
@@ -936,10 +1335,33 @@ case "$*" in
       listless:*) echo '{"paging":{"total":3}}' ;;
       nototal:*) issues 1 1 src/main/java/App.java java:S2 | /usr/bin/jq -c 'del(.paging)' ;;
       fraction:*) issues 501 500 src/Other.java java:S1 | /usr/bin/jq -c '.paging.total = 501.5' ;;
+      web:*) issues 1 1 src/a.ts typescript:S1 local-mixed-web ;;
+      accepted:*)
+        case "$*" in
+          *issueStatuses=*ACCEPTED*) issues 1 1 src/main/java/App.java java:S2 local-project ACCEPTED ;;
+          *) echo '{"paging":{"total":0},"issues":[]}' ;;
+        esac ;;
+      false-positive:*)
+        case "$*" in
+          *issueStatuses=*FALSE_POSITIVE*) issues 1 1 src/main/java/App.java java:S2 local-project FALSE_POSITIVE ;;
+          *) echo '{"paging":{"total":0},"issues":[]}' ;;
+        esac ;;
       *) echo '{"paging":{"total":0},"issues":[]}' ;;
     esac ;;
   *) exit 7 ;;
 esac
+"""
+STUB_NPX = """#!/bin/bash
+printf '%s\\n' "$*" >>"${STUB_ARGV_LOG:-/dev/null}"
+printf 'npx\\n' >>"${STUB_NPX_LOG:-/dev/null}"
+printf 'cwd=%s json=%s prefixed=%s\\n' "$PWD" "${SONAR_SCANNER_JSON_PARAMS-unset}" \\
+  "${SONAR_SCANNER_SONAR_EXCLUSIONS-unset}" >>"${STUB_NPX_ENV_LOG:-/dev/null}"
+for a in "$@"; do case "$a" in -Dsonar.working.directory=*) work=${a#*=} ;; esac; done
+if [ -n "${STUB_CE:-}" ] && [ -n "${work:-}" ]; then
+  mkdir -p "$work"
+  printf 'ceTaskId=%s\\n' "$STUB_CE" >"$work/report-task.txt"
+fi
+exit 0
 """
 
 
@@ -952,12 +1374,13 @@ def test_sonar_gate_script() -> None:
     verify_mktemp, mktemp_env = strict_mktemp(fx, "sonar-gate.sh")
     (project / "pom.xml").write_text("<project/>\n")
     for path, text in ((project / "mvnw", STUB_MVNW), (stubs / "curl", STUB_CURL),
-                       (stubs / "sleep", "#!/bin/bash\n")):
+                       (stubs / "npx", STUB_NPX), (stubs / "sleep", "#!/bin/bash\n")):
         path.write_text(text)
         path.chmod(0o755)
     env = {**os.environ, "PATH": f"{stubs}:{mktemp_env['PATH']}", "TMPDIR": str(tmp),
            "STUB_MKTEMP_LOG": mktemp_env["STUB_MKTEMP_LOG"],
-           "SONAR_TOKEN": "fixture", "SONAR_HOST_URL": "http://sonar.invalid"}
+           "SONAR_TOKEN": "fixture-analysis-secret", "SONAR_ADMIN_TOKEN": "fixture-admin-secret",
+           "SONAR_HOST_URL": "http://sonar.invalid", "STUB_ARGV_LOG": str(fx / "argv.log")}
     listed = fx / "files.txt"
     listed.write_text("src/main/java/App.java\n")
     files = ("--files", str(listed))
@@ -991,6 +1414,248 @@ def test_sonar_gate_script() -> None:
         check(f"sonar-gate.sh: {name}",
               proc.returncode == want_exit and want in proc.stdout + proc.stderr,
               f"exit {proc.returncode}, output {(proc.stdout + proc.stderr).strip()[-160:]!r}")
+
+    def gate(where: Path, *extra: str, **stub: str) -> subprocess.CompletedProcess:
+        return subprocess.run([SONAR_GATE, "--project-dir", str(where), "--no-boot", *extra],
+                              capture_output=True, text=True, timeout=60, check=False,
+                              env={**env, "STUB_CE": "task-1", "STUB_CE_STATUS": "SUCCESS",
+                                   **stub})
+
+    def output(proc: subprocess.CompletedProcess) -> str:
+        return f"exit {proc.returncode}, output {(proc.stdout + proc.stderr).strip()[-240:]!r}"
+
+    def project_dir(name: str, gate_settings: str = "", git: bool = False) -> Path:
+        where = fx / name
+        where.mkdir()
+        (where / "pom.xml").write_text("<project/>\n")
+        (where / ".gitignore").write_text("target/\n")
+        (where / "mvnw").write_text(STUB_MVNW)
+        (where / "mvnw").chmod(0o755)
+        if gate_settings:
+            (where / ".sonar-gate").write_text(gate_settings)
+        if "js-project = web" in gate_settings:
+            (where / "web/src").mkdir(parents=True)
+            (where / "web/sonar-project.properties").write_text("sonar.sources=.\n")
+            (where / "web/src/a.ts").write_text("export const a = 1;\n")
+        if git:
+            git_in(where, "init", "-q")
+            git_in(where, "add", "-A")
+            git_in(where, "commit", "-q", "-m", "x")
+        return where
+
+    git_env = {**env, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+
+    def git_in(where: Path, *args: str) -> None:
+        subprocess.run(["git", "-C", str(where), "-c", "user.name=f",
+                        "-c", "user.email=f@example.invalid", *args],
+                       check=True, capture_output=True, env=git_env)
+
+    argv_log, npx_log = fx / "argv.log", fx / "npx.log"
+
+    def builds() -> tuple[int, int]:
+        maven = argv_log.read_text().count("clean test-compile") if argv_log.exists() else 0
+        npx = npx_log.read_text().count("npx") if npx_log.exists() else 0
+        return maven, npx
+
+    proc = gate(project, *files, STUB_DUPS="one")
+    check("sonar-gate.sh: a duplicated block in a listed file is a finding, with its partner",
+          proc.returncode == 2 and "src/main/java/App.java:3 [duplication] 10 lines duplicated "
+          "at src/main/java/Other.java:20" in proc.stdout, output(proc))
+    for status, issues in (("ACCEPTED", "accepted"), ("FALSE_POSITIVE", "false-positive")):
+        proc = gate(project, *files, STUB_ISSUES=issues)
+        check(f"sonar-gate.sh: an issue marked {status} on the server still counts, and says so",
+              proc.returncode == 2
+              and f"App.java:7 [java:S2] fixture (marked {status}" in proc.stdout, output(proc))
+
+    proc = gate(project, *files, STUB_HOTSPOTS="two")
+    check("sonar-gate.sh: a security hotspot in a listed file is a finding, a reviewed one too, "
+          "and one elsewhere is not",
+          proc.returncode == 2
+          and "App.java:9 [java:S2245] security hotspot: fixture hotspot" in proc.stdout
+          and "App.java:11 [java:S2245] security hotspot: fixture safe (reviewed SAFE" in proc.stdout
+          and "fixture elsewhere" not in proc.stdout, output(proc))
+    mvnw_env = fx / "mvnw-env.log"
+    proc = gate(project, *files, MAVEN_OPTS="-Dsonar.exclusions=**/*",
+                STUB_MVNW_ENV_LOG=str(mvnw_env))
+    check("sonar-gate.sh: Maven runs without MAVEN_OPTS, which could carry Sonar properties",
+          mvnw_env.exists() and set(mvnw_env.read_text().split()) == {"opts=unset"},
+          mvnw_env.read_text() if mvnw_env.exists() else "mvnw never ran")
+
+    # A TypeScript project beside the Maven one: its own key, its paths under its directory, and
+    # no Maven build when only its files are listed.
+    mixed = project_dir("mixed", "js-project = web\n")
+    web_files = fx / "web-files.txt"
+    web_files.write_text("web/src/a.ts\n")
+    before = builds()
+    proc = gate(mixed, "--files", str(web_files), STUB_ISSUES="web", STUB_NPX_LOG=str(npx_log))
+    check("sonar-gate.sh: a TypeScript finding is reported under the project's directory",
+          proc.returncode == 2 and "web/src/a.ts:7 [typescript:S1]" in proc.stdout, output(proc))
+    check("sonar-gate.sh: listing only TypeScript files scans with npx and builds no Maven",
+          builds() == (before[0], before[1] + 1), f"{before} -> {builds()}")
+    npx_env = fx / "npx-env.log"
+    gate(mixed, "--files", str(web_files), STUB_NPX_LOG=str(npx_log), STUB_NPX_ENV_LOG=str(npx_env),
+         SONAR_SCANNER_JSON_PARAMS='{"sonar.exclusions":"**/*"}',
+         SONAR_SCANNER_SONAR_EXCLUSIONS="**/*")
+    seen = npx_env.read_text() if npx_env.exists() else ""
+    check("sonar-gate.sh: the npm scanner gets no SONAR_SCANNER variable and runs outside the "
+          "project, so no project .npmrc reaches it",
+          "json=unset prefixed=unset" in seen and f"cwd={mixed / 'web'}" not in seen
+          and f"-Dsonar.projectBaseDir={mixed / 'web'}" in argv_log.read_text(), seen)
+    proc = gate(mixed, "--files", str(web_files), STUB_DUPS="one", STUB_DUP_PATH="src/a.ts",
+                STUB_DUP_PARTNER="src/b.ts", STUB_NPX_LOG=str(npx_log))
+    check("sonar-gate.sh: a TypeScript duplication is reported under the project's directory",
+          proc.returncode == 2
+          and "web/src/a.ts:3 [duplication] 10 lines duplicated at web/src/b.ts:20" in proc.stdout,
+          output(proc))
+
+    # The repository's rule set is checked against the server on every run, before any scan.
+    ruled = project_dir("ruled", "rules = rules.txt\n")
+    (ruled / "rules.txt").write_text("java:S1 max=3    # a fixture rule\n")
+    defaults = ('[{"key":"java:S1","params":[{"key":"max","defaultValue":"5"},'
+                '{"key":"min","defaultValue":"0"}]},{"key":"java:S2"},{"key":"java:S7"},'
+                '{"key":"java:S9"}]')
+
+    def activation(rule: str, inherit: str = "NONE", profile: str = "pf", **params: str) -> str:
+        values = ",".join(f'{{"key":"{k}","value":"{v}"}}' for k, v in params.items())
+        return f'"{rule}":[{{"qProfile":"{profile}","inherit":"{inherit}","params":[{values}]}}]'
+
+    match = activation("java:S1", max="3", min="0")
+    ruled_stub = {"STUB_PROFILE": "1", "STUB_RULES": defaults}
+    drift_cases = [
+        ("refuses to answer while a listed rule is inactive, naming --provision", {}, 1,
+         ["activate java:S1", "--provision", "owner decides"]),
+        ("names an override of a Sonar way rule, with its values",
+         {"STUB_PARENT_ACTIVES": "{" + activation("java:S1", profile="sw", max="5", min="0") + "}",
+          "STUB_ACTIVES": "{" + activation("java:S1", "INHERITED", max="5", min="0") + "}"}, 1,
+         ["override java:S1 max=3", "other parameters (override)"]),
+        ("refuses a listed value changed on the server",
+         {"STUB_ACTIVES": "{" + activation("java:S1", max="4", min="0") + "}"}, 1,
+         ["activate java:S1"]),
+        ("refuses a parameter the file leaves at its default, loosened on the server",
+         {"STUB_ACTIVES": "{" + activation("java:S1", max="3", min="-100") + "}"}, 1,
+         ["activate java:S1"]),
+        ("refuses a rule the profile adds and the file does not list",
+         {"STUB_ACTIVES": "{" + match + "," + activation("java:S9") + "}"}, 1,
+         ["deactivate java:S9"]),
+        ("refuses an inherited rule whose parameters the profile overrides",
+         {"STUB_ACTIVES": "{" + match + "," + activation("java:S7", "OVERRIDES") + "}"}, 1,
+         ["reset java:S7"]),
+        ("refuses a rule of Sonar way the profile deactivated",
+         {"STUB_ACTIVES": "{" + match + "}",
+          "STUB_PARENT_ACTIVES": "{" + activation("java:S2", profile="sw") + "}"}, 1,
+         ["reactivate java:S2"]),
+        ("ignores another profile's activations",
+         {"STUB_ACTIVES": "{" + activation("java:S1", profile="other", max="3", min="0") + "}"}, 1,
+         ["activate java:S1"]),
+        ("refuses a profile that is not a child of Sonar way",
+         {"STUB_ACTIVES": "{" + match + "}", "STUB_PARENT": "elsewhere"}, 1, ["not a child"]),
+        ("refuses a project on another profile for a rules language",
+         {"STUB_ACTIVES": "{" + match + "}", "STUB_ASSIGNED": "sw"}, 1,
+         ['java does not use "ruled way"']),
+        ("refuses a project on a custom profile for another language",
+         {"STUB_ACTIVES": "{" + match + "}", "STUB_XML_PROFILE": "lenient"}, 1,
+         ["xml uses lenient"]),
+        ("refuses any setting of a project key's own, narrowing or not",
+         {"STUB_ACTIVES": "{" + match + "}",
+          "STUB_SETTINGS": '{"settings":[{"key":"sonar.javascript.maxFileSize","value":"1",'
+                           '"inherited":false}]}'}, 1,
+         ["set sonar.javascript.maxFileSize"]),
+        ("refuses a narrowing setting at instance level, where it reaches every project",
+         {"STUB_ACTIVES": "{" + match + "}",
+          "STUB_INSTANCE_SETTINGS": '{"settings":[{"key":"sonar.global.exclusions",'
+                                    '"values":["**/*"],"inherited":false}]}'}, 1,
+         ["sonar.global.exclusions", "the owner decides"]),
+        ("ignores an instance setting that narrows nothing",
+         {"STUB_ACTIVES": "{" + match + "}",
+          "STUB_INSTANCE_SETTINGS": '{"settings":[{"key":"sonar.core.serverBaseURL",'
+                                    '"value":"x","inherited":false}]}'}, 0, ["clean"]),
+        ("refuses a narrowing setting on a project key",
+         {"STUB_ACTIVES": "{" + match + "}",
+          "STUB_SETTINGS": '{"settings":[{"key":"sonar.coverage.exclusions","values":["**/*"],'
+                           '"inherited":false}]}'}, 1,
+         ["set sonar.coverage.exclusions"]),
+        ("ignores a narrowing setting inherited from the instance",
+         {"STUB_ACTIVES": "{" + match + "}",
+          "STUB_SETTINGS": '{"settings":[{"key":"sonar.javascript.exclusions","values":["x"],'
+                           '"inherited":true}]}'}, 0, ["clean"]),
+        ("answers once the server matches the repository, inherited rules included",
+         {"STUB_ACTIVES": "{" + match + "," + activation("java:S2", "INHERITED") + "}",
+          "STUB_PARENT_ACTIVES": "{" + activation("java:S2", profile="sw") + "}"}, 0, ["clean"]),
+    ]
+    for name, stub, want_exit, wants in drift_cases:
+        proc = gate(ruled, **ruled_stub, **stub)
+        check(f"sonar-gate.sh: {name}",
+              proc.returncode == want_exit and all(w in proc.stdout + proc.stderr for w in wants),
+              output(proc))
+    proc = gate(ruled)
+    check("sonar-gate.sh: refuses to answer when the server has no profile for the rules",
+          proc.returncode == 1 and "--provision" in proc.stderr, output(proc))
+    (ruled / ".sonar-gate").write_text("rules = rules.txt\nide-exclusions = gen/**, b/**\n")
+    ide_set = ('{"settings":[{"key":"sonar.exclusions","values":["gen/**","b/**"],'
+               '"inherited":false}]}')
+    proc = gate(ruled, **ruled_stub, STUB_ACTIVES="{" + match + "}", STUB_SETTINGS=ide_set)
+    check("sonar-gate.sh: refuses the IDE's exclusions while the root pom sets none to keep them "
+          "out of the gate's Maven scan",
+          proc.returncode == 1 and "root pom sets no sonar.exclusions" in proc.stderr, output(proc))
+    (ruled / "pom.xml").write_text("<project><properties><sonar.exclusions>gen/**"
+                                   "</sonar.exclusions></properties></project>\n")
+    proc = gate(ruled, **ruled_stub, STUB_ACTIVES="{" + match + "}")
+    check("sonar-gate.sh: refuses a key that lacks the IDE's exclusions .sonar-gate gives it",
+          proc.returncode == 1 and "missing sonar.exclusions" in proc.stderr, output(proc))
+    proc = gate(ruled, **ruled_stub, STUB_ACTIVES="{" + match + "}",
+                STUB_SETTINGS=ide_set.replace("]}", ',{"key":"sonar.test.exclusions",'
+                                                    '"values":["gen/**"],"inherited":false}]}'))
+    check("sonar-gate.sh: refuses the IDE's exclusions as test exclusions, which would reach the "
+          "gate's scan of the Java tests",
+          proc.returncode == 1 and "set sonar.test.exclusions" in proc.stderr, output(proc))
+    proc = gate(ruled, **ruled_stub, STUB_ACTIVES="{" + match + "}", STUB_SETTINGS=ide_set)
+    check("sonar-gate.sh: answers once the key carries the IDE's exclusions",
+          proc.returncode == 0, output(proc))
+
+    # A project whose inputs match its last analysis from here is read, not rebuilt, and only
+    # what changed is rebuilt.
+    fresh = project_dir("fresh", "js-project = web\n", git=True)
+    stub = {"STUB_NPX_LOG": str(npx_log)}
+
+    steps = [
+        ("a first run builds both projects", None, {}, (1, 1)),
+        ("an unchanged run builds nothing", None, {}, (0, 0)),
+        ("an edited pom rebuilds Maven alone",
+         lambda: (fresh / "pom.xml").write_text("<project><!-- x --></project>\n"), {}, (1, 0)),
+        ("an edited TypeScript file rebuilds the web project alone",
+         lambda: (fresh / "web/src/a.ts").write_text("export const a = 2;\n"), {}, (0, 1)),
+        ("an untracked file rebuilds its project",
+         lambda: (fresh / "src").mkdir() or (fresh / "src/New.java").write_text("class N {}\n"),
+         {}, (1, 0)),
+        ("a commit rebuilds both", lambda: (git_in(fresh, "add", "-A"),
+                                            git_in(fresh, "commit", "-q", "-m", "y")), {}, (1, 1)),
+        ("another analysis on the server rebuilds both", None, {"STUB_ANALYSIS": "a2"}, (1, 1)),
+        ("a profile changed on the server rebuilds both", None,
+         {"STUB_ANALYSIS": "a2", "STUB_RULES_UPDATED": "t2"}, (1, 1)),
+        ("a server upgrade rebuilds both", None,
+         {"STUB_ANALYSIS": "a2", "STUB_RULES_UPDATED": "t2", "STUB_SERVER_VERSION": "27.1"}, (1, 1)),
+        ("and then nothing", None,
+         {"STUB_ANALYSIS": "a2", "STUB_RULES_UPDATED": "t2", "STUB_SERVER_VERSION": "27.1"}, (0, 0)),
+    ]
+    for name, change, extra_stub, want in steps:
+        if change:
+            change()
+        before = builds()
+        gate(fresh, **stub, **extra_stub)
+        after = builds()
+        got = (after[0] - before[0], after[1] - before[1])
+        check(f"sonar-gate.sh: {name}", got == want, f"built {got}, expected {want}")
+
+    proc = gate(fresh, **stub, STUB_ANALYSIS="a2", STUB_RULES_UPDATED="t2",
+                STUB_SERVER_VERSION="27.1", STUB_ANALYSIS_AFTER_READ="a9",
+                STUB_READ_MARK=str(fx / "issues-read"))
+    check("sonar-gate.sh: refuses findings read while another analysis landed",
+          proc.returncode == 1 and "landed while its findings were read" in proc.stderr,
+          output(proc))
+
+    leaked = [t for t in ("fixture-analysis-secret", "fixture-admin-secret")
+              if t in argv_log.read_text()]
+    check("sonar-gate.sh: no token ever reaches a command line", not leaked, repr(leaked))
     verify_mktemp()
     shutil.rmtree(fx)
 
