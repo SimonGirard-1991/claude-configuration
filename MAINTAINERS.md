@@ -687,7 +687,9 @@ says explicitly that the external reviewer was skipped — no retry loop.
 ## Known open questions
 
 - **Known limits of the Sonar gate after PersonalFinance step 0.8b0b** (2026-10-12), left by the
-  owner's decision to stop that step after two review passes:
+  owner's decision to stop that step after two review passes. *Accepted as they are, the same day:
+  the owner closed the gate's hardening for good, since it lists nearly every finding and more
+  passes cost more than they find. Do not reopen them without the owner asking.*
   - A `@SuppressWarnings` line passes as justified when a string literal on it holds `//`
     (`@SuppressWarnings("java:S1075") static final String URL = "https://example.com";`): the
     reason check finds the URL's `//`. It is reported to the user, not silent, and it predates the
