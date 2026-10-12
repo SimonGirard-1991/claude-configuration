@@ -42,6 +42,66 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **The Sonar gate's bypasses after 0.8b0's fifth review are closed** (2026-10-12, PersonalFinance
+  step 0.8b0b). Each route was measured before it was guarded: read from the analyzers' own code
+  in `~/.sonar/cache` (sonar-java 8.41, SonarJS 13.8), then planted beside a control on the
+  26.8 server, every planted form hiding the issue its control showed.
+  - **Never accepted, reason or not:** `@Generated` (`javax|jakarta.annotation[.processing]`,
+    resolved by type on a class or method by sonar-java's `GeneratedCodeFilter`, an any-rule
+    filter) and, in Java, a `\u` escape for a printable ASCII character: `@\u0047enerated` hid its
+    method's issues, since Java decodes escapes before it reads a token. javac's parser finds
+    `@Generated` (below); a text match for the word, tried first, refused comments, imports and
+    `Generated.class` with no way out, and went with the second review. Excluded code is generated
+    code: changed Java under the base's root-pom exclusions must carry a generator's header in its
+    first 20 lines.
+  - **`@SuppressWarnings` takes string literals on one line.** sonar-java resolves values with
+    `asConstant`, so `"a" + "ll"` and a constant holding "all" suppress everything, and
+    `@SuppressWarnings( // reason` with `"all")` on the next line passed the old per-line audit.
+    "all" is compared case-sensitively and javac keys lower-cased (from the bytecode).
+  - **javac settles what a Java annotation is.** The first review pass found the text audit
+    still blind to spellings javac reads: a comment or a line break inside the annotation
+    (`@/**/SuppressWarnings/**/("all")`, `@java.lang` / `.SuppressWarnings` / `("all")`), and
+    identifier-ignorable characters, which javac drops from a name, raw (U+200B, U+00AD, controls)
+    or escaped (`@Suppress\u0000Warnings`), each resolved by sonar-java's ECJ as the real type. Every
+    pass had found one more spelling: matching syntax with regexes is a list of spellings, and a
+    language accepts more. `scripts/SuppressionAnnotations.java` has javac's parser list every
+    `@SuppressWarnings` and `@Generated` of the changed Java files, and the hook refuses any
+    `@Generated`, any "all", and any `@SuppressWarnings` whose source is not one line of printable
+    ASCII with string literals, the form the line audit reads. About 0.35 s per Stop that changed
+    Java. The line audit stays for the reasons, NOSONAR and the other languages. A NUL, which ends
+    a line for macOS awk, is dropped before either reads a file.
+  - **SonarJS's vocabulary, completed.** NOSONAR is upper-cased with JavaScript's `toUpperCase`,
+    which maps U+017F to S, the only code point that becomes a letter of NOSONAR (checked over all
+    of them): `// noſonar` suppresses. ESLint trims a comment (any JavaScript space) and reads a
+    directive from its first word (`eslint`, its `-env|-enable|-disable[-next]-line` forms,
+    `exported`, `global(s)`), so `/*` alone then `eslint rule: off`, `/* eslint` alone, and a
+    no-break space before `eslint` are inline configs. Source lines are split where Java or
+    JavaScript ends them (a lone CR; LS and PS) and those spaces read as spaces.
+  - **Code kept out of analysis is reported.** Changed Java under the root pom's exclusions passes
+    on a generator's header, which anyone can write: each such file and its header line join the
+    once-per-set systemMessage that reports justified suppressions.
+  - **Every changed source file must be analysed** (`--indexed`). Exclusions are one way out of
+    analysis; a directory that is no module, a source root, a size limit or a language setting are
+    others, and a file Sonar never read has no findings. Measured: a Java file under an orphan
+    `src/main/java` passed the old gate. Java under `src/main|test/java`, poms, and the JS project's
+    code by SonarJS's and its CSS analyzer's default suffixes go to the gate, which refuses one with
+    no component in its project's latest analysis. A `.d.ts` is left out: SonarJS excludes
+    `**/*.d.ts` by default, and it holds declarations only.
+  - **The JVM's option variables are unset for the scans.** `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`
+    and `_JAVA_OPTIONS` reach the scanners' JVMs: `-Dsonar.java.file.suffixes=.none` there turned a
+    file with two findings clean on the old gate.
+  - **SonarJS's generated-code detection is off** in the gate's scan
+    (`sonar.javascript.detectGeneratedCode=false`). It skips 140 of SonarJS's 575 rules on files a
+    codegen manifest in the repository marks (`.openapi-generator/FILES`, among others), so a
+    manifest could silence hand-written code. Found in the bundle while measuring, beyond the review's
+    list; the property was accepted by the server, but no manifest was planted.
+  - **Instance settings are an allowlist**, as project keys' already were: only the five keys this
+    server held, each changing no analysis (identity, base URL, authentication, the quality mode,
+    whether a child profile may drop an inherited rule, which the profile check refuses anyway).
+  - **Settings are checked without a rules file**, and `--provision` makes them match without one.
+  - **A pom's Sonar properties are compared with xmllint's by name and value**, not by count: a
+    CDATA section in a value kept the count and changed what Maven reads.
+
 - **The Sonar gate applies a committed rule set, scans TypeScript and counts duplication**
   (2026-10-11). Simon's IDE reported 326 issues on PersonalFinance while the gate, run on the
   whole project, reported 0. The gate counted correctly, but it measured something else:
@@ -91,11 +151,11 @@ says explicitly that the external reviewer was skipped — no retry loop.
     hid a property Maven read. A `.properties` line ends at LF, CRLF or a lone CR, and a
     continuation drops its leading spaces, as `properties-file` reads them.
   - **A changed pom goes to the gate**: the Maven scan analyses each module's pom.xml.
-  - **Every Sonar property in a pom, a `sonar-project.properties` or `.mvn/*.config` needs its
-    reason**, not a list of the narrowing ones. `sonar.lang.patterns.<lang>` drops a language from
-    analysis and `sonar.java.source` disables version-gated rules; the review loop's third pass
-    found both passing the list. Only new or changed properties are audited, so this costs one
-    comment per Sonar property added.
+  - **Every Sonar property in a pom or a `sonar-project.properties` needs its reason**, not a list
+    of the narrowing ones; one in `.mvn/maven.config` or `.mvn/jvm.config` is refused outright.
+    `sonar.lang.patterns.<lang>` drops a language from analysis and `sonar.java.source` disables
+    version-gated rules; the review loop's third pass found both passing the list. Only new or
+    changed properties are audited, so this costs one comment per Sonar property added.
   - **TypeScript was never scanned.** The Maven scanner reads Maven modules only, and the hook
     triggered on `*.java` alone. `js-project = DIR` adds a second project key, scanned with a
     pinned `@sonar/scan`, and the hook's file set takes in that directory's sources.
@@ -625,6 +685,27 @@ says explicitly that the external reviewer was skipped — no retry loop.
   blocked by the loop-context ban above.
 
 ## Known open questions
+
+- **Known limits of the Sonar gate after PersonalFinance step 0.8b0b** (2026-10-12), left by the
+  owner's decision to stop that step after two review passes:
+  - A `@SuppressWarnings` line passes as justified when a string literal on it holds `//`
+    (`@SuppressWarnings("java:S1075") static final String URL = "https://example.com";`): the
+    reason check finds the URL's `//`. It is reported to the user, not silent, and it predates the
+    step. The fix: a `//` only after the well-formed annotation, or the helper reading the comment.
+  - `scripts/SuppressionAnnotations.java` needs JDK 16 or later from PATH, run in the repository,
+    so a `.java-version` there picks the JDK. When it fails, the whole gate is OFF for the turn, and
+    the message gives no cause: its stderr is not shown.
+  - Regenerated jOOQ code lists every changed file in the systemMessage, truncated at 9500
+    characters; grouping by excluded root and header would read better.
+  - Changed Java outside `src/main|test/java` is neither required to be analysed nor flagged; a
+    `pom.xml` that is no module (a test fixture) would be refused as not analysed; `.jav` files,
+    which sonar-java reads, are outside the hook's file set.
+  - Configuration outside the repository still reaches the scans: `bin/mvn` sources
+    `~/.mavenrc` and `/etc/mavenrc` after the gate's `env -u` (`MAVEN_SKIP_RC` would stop it), and
+    `npx` re-exports `~/.npmrc` keys. User-level configuration was recorded as the owner's in 0.8b0;
+    `api/ce/task`'s scanner context could check every channel at once, unconfirmed on 26.8.
+  - Whether sonar-java reads a NOSONAR spelled with `\u` escapes in a comment was not measured;
+    the hook refuses every printable-ASCII escape in Java either way.
 
 - **Index flags hide a file from the Sonar gate** (2026-09-30).
   `git update-index --assume-unchanged` or `--skip-worktree` on a pom or a java file

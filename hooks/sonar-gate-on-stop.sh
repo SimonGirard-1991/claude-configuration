@@ -11,8 +11,8 @@
 # an analyzer decides. scripts/sonar-gate.sh runs the real Sonar ruleset and exit 2 feeds the
 # findings back, so the turn cannot end dirty.
 #
-# One file set (java sources and the JS project's whole directory), computed once, used three
-# times. The trigger, the suppression scan (prose aside) and the findings filter all read
+# One file set (java sources, poms and the JS project's whole directory), computed once, used
+# three times. The trigger, the suppression scan (prose aside) and the findings filter all read
 # `git diff` against the fork point UNION `ls-files --others`, so an untracked new class is seen
 # by all three or none. An earlier version triggered on
 # `git status --porcelain` (which collapses untracked directories) while scanning `git diff`
@@ -39,15 +39,35 @@
 # attributes in a start tag, whitespace in an end tag), so a value spread over several lines is one
 # property. The report shows each reason, so a borrowed one is visible. The gate accepts such
 # properties only in a pom: any in .mvn/maven.config or .mvn/jvm.config is refused. A value routed
-# through a ${property} is not traced. Poms are audited even when no java file changed, though
-# nothing is scanned then: --files would be empty.
+# through a ${property} is not traced. A changed pom is audited and, since the Maven scan analyses
+# each module's pom.xml, listed for the gate too. The pom scan is hand-rolled, so each property's
+# name and value must also be what xmllint reads.
+#
+# Two forms are never accepted, reason or not, because sonar-java honours them for every rule:
+# @Generated (javax or jakarta annotation[.processing]) on a class or method, whose
+# GeneratedCodeFilter drops all its issues, and in Java a \uXXXX escape for a printable ASCII
+# character (measured 2026-10-12 on the server, both hiding every issue of a planted method). A
+# text match cannot read Java the way javac does (escapes, identifier-ignorable characters,
+# comments or line breaks inside an annotation), so javac's parser
+# (scripts/SuppressionAnnotations.java) lists every @SuppressWarnings and @Generated of the changed
+# Java files, and each must be one the line audit read as written. That check covers whole files,
+# not only the lines added since the base: an annotation already there is refused when its file
+# is touched, as scope = changed blocks on a touched file's existing findings.
+#
+# Exclusions are not the only way a file leaves analysis: a module missing from the build, a
+# source root, a size limit or a language setting does it too. So every changed source file (Java
+# under src/main/java or src/test/java, a pom, the JS project's code) goes to the gate as
+# --indexed, and the gate refuses one its latest analysis holds no component for. Java under the
+# base's root-pom exclusions is not analysed by design, so it must carry a generator's header.
 #
 # Both audits compare each file with its blob at the base rather than parse a diff, so neither
 # diff config nor .gitattributes can hide a line or misnumber one. Lines are counted, so a second
 # copy of a grandfathered line is new. A file moved since the base is audited as new, so its old
-# suppressions need reasons too; mapping renames was judged not worth it. Every pattern is ASCII,
-# so the text tools run under LC_ALL=C: in a UTF-8 locale, macOS awk aborts on a Latin-1 byte and
-# grep stops matching the line.
+# suppressions need reasons too; mapping renames was judged not worth it. Every pattern is matched
+# as bytes, the few non-ASCII ones spelled in UTF-8, so the text tools run under LC_ALL=C: in a
+# UTF-8 locale, macOS awk aborts on a Latin-1 byte and grep stops matching the line. Source lines
+# end where Java or JavaScript ends them (a lone CR; LS and PS too), and every space JavaScript's
+# \s takes reads as a space, since ESLint trims a comment with them before reading its directive.
 #
 # Justified suppressions reach the user as a systemMessage, once per distinct set. An earlier
 # version printed them to stderr and exited 0, and stderr from a hook that exits 0 goes to the
@@ -81,10 +101,11 @@
 # only those is not re-scanned until a fingerprinted input changes; remove
 # $TMPDIR/claude-sonar-fp-* to force one.
 #
-# CLAUDE_CONFIG_DIR / CLAUDE_SONAR_GATE overrides exist for testing.
+# CLAUDE_CONFIG_DIR / CLAUDE_SONAR_GATE / CLAUDE_SONAR_JAVA_ANNOTATIONS overrides exist for testing.
 
 ROOT="${CLAUDE_CONFIG_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 GATE="${CLAUDE_SONAR_GATE:-$ROOT/scripts/sonar-gate.sh}"
+JAVA_ANNOTATIONS="${CLAUDE_SONAR_JAVA_ANNOTATIONS:-$ROOT/scripts/SuppressionAnnotations.java}"
 MAX_ROUNDS=3
 GATE_TIMEOUT="${CLAUDE_SONAR_GATE_TIMEOUT:-360}"
 
@@ -198,11 +219,23 @@ base_blob() {
   git -C "$repo" cat-file blob "$base:$1" 2>/dev/null
 }
 
-# Prints line<TAB>text for each line of the working-tree file $1 that matches the ERE $KEEP and
-# does not appear as a whole line in the file at the base.
+# Splits the source text of file $1 into lines where its language ends one: LF, CRLF and a lone
+# CR, and in JavaScript LS and PS (U+2028, U+2029) too. Every other space in JavaScript's \s
+# becomes an ASCII space: U+00A0, U+1680, U+2000 to U+200A, U+202F, U+205F, U+3000 and U+FEFF.
+# A NUL is dropped, since macOS awk ends a line at one and would hide the rest of it.
+CR=$'\r'
+LS_PS=$'\xe2\x80[\xa8\xa9]'
+UNICODE_SPACE=$'(\xc2\xa0|\xe1\x9a\x80|\xe2\x80[\x80-\x8a\xaf]|\xe2\x81\x9f|\xe3\x80\x80|\xef\xbb\xbf)'
+source_lines() {
+  local edits=(-e "s/$CR\$//" -e "s/$UNICODE_SPACE/ /g")
+  case "$1" in *.java) ;; *) edits+=(-e "s/$LS_PS/$CR/g") ;; esac
+  LC_ALL=C tr -d '\000' | LC_ALL=C sed -E "${edits[@]}" | LC_ALL=C tr '\r' '\n'
+}
+
+# Prints line<TAB>text for each source line of the working-tree file $1 that matches the ERE $KEEP
+# and does not appear as a whole line in the file at the base.
 new_lines() {
   KEEP="$KEEP" LC_ALL=C awk '
-    { sub(/\r$/, "") }
     FILENAME == ARGV[1] { if ($0 ~ ENVIRON["KEEP"]) seen[$0]++; next }
     $0 ~ ENVIRON["KEEP"] {
       if (seen[$0] > 0) {
@@ -211,7 +244,7 @@ new_lines() {
       }
       print FNR "\t" $0
     }
-  ' <(base_blob "$1") "$repo/$1"
+  ' <(base_blob "$1" | source_lines "$1") <(source_lines "$1" <"$repo/$1")
 }
 
 SONAR_SUPPRESSION='sonar\.[[:alnum:]_-]'
@@ -289,7 +322,8 @@ POM_SCAN='
 '
 
 # Prints G or B, a tab, then an entry for each suppression property of the pom $1 that is new or
-# changed against the base: G when an XML comment gives its reason, B when none does.
+# changed against the base: G when an XML comment gives its reason, B when none does. Then P, a
+# tab, and the name and value of each Sonar property it read, tab-separated.
 pom_audit() {
   RE="$SONAR_SUPPRESSION" P="$1" LC_ALL=C awk "$POM_SCAN"'
     { sub(/\r$/, "") }
@@ -317,15 +351,27 @@ pom_audit() {
         if (why == "") print "B\t" entry
         else print "G\t" entry " (reason: " why ")"
       }
-      print "N\t" n
+      for (i = 1; i <= n; i++) print "P\t" N[i] "\t" V[i]
     }' <(base_blob "$1") "$repo/$1"
 }
 
 # The pom scan above is hand-rolled, so a construct it misreads (a CDATA section holding "<!--",
-# say) could hide a property Maven reads. xmllint counts the Sonar properties too, and the two
-# counts must agree.
-xml_sonar_count() {
-  xmllint --xpath 'count(//*[starts-with(local-name(),"sonar.")])' "$repo/$1" 2>/dev/null
+# say, or one that moves where a value ends) could hide a property Maven reads. xmllint reads the
+# Sonar properties too, and both must find the same names with the same values. Prints them
+# sorted, one `name<TAB>value` per line, the value with its whitespace collapsed as the scan
+# collapses it.
+xml_sonar_props() {
+  local path="$repo/$1" all='//*[starts-with(local-name(),"sonar.")]' tab=$'\t' n i one out=""
+  n=$(xmllint --xpath "count($all)" "$path" 2>/dev/null) || return 1
+  case "$n" in '' | *[!0-9]*) return 1 ;; esac
+  i=1
+  while [ "$i" -le "$n" ]; do
+    one=$(xmllint --xpath "concat(local-name(($all)[$i]), '$tab', normalize-space(($all)[$i]))" "$path" 2>/dev/null) ||
+      return 1
+    out="$out$one"$'\n'
+    i=$((i + 1))
+  done
+  printf '%s' "$out" | LC_ALL=C sort
 }
 
 # A .properties line ends at LF, CRLF or a lone CR (java.util.Properties, and properties-file,
@@ -548,17 +594,19 @@ pom_good=""
 while IFS= read -r -d '' f; do
   [ -f "$repo/$f" ] || continue
   found=$(pom_audit "$f") || audit_failed "$f"
-  scanned=""
   while IFS=$'\t' read -r verdict entry; do
     case "$verdict" in
       G) pom_good="${pom_good}${entry}"$'\n' ;;
       B) pom_bad="${pom_bad}${entry}"$'\n' ;;
-      N) scanned="$entry" ;;
     esac
   done < <(printf '%s\n' "$found")
-  parsed=$(xml_sonar_count "$f") || audit_failed "$f"
-  [ "$parsed" = "$scanned" ] ||
-    pom_bad="${pom_bad}  $f: Maven reads $parsed Sonar properties, the audit $scanned; write them as plain elements"$'\n'
+  scanned=$(printf '%s\n' "$found" | LC_ALL=C awk -F'\t' '$1 == "P" { print $2 "\t" $3 }' | LC_ALL=C sort)
+  parsed=$(xml_sonar_props "$f") || audit_failed "$f"
+  if [ "$parsed" != "$scanned" ]; then
+    pom_bad="${pom_bad}  $f: xmllint reads its Sonar properties apart from the audit; write them as plain elements:"$'\n'
+    pom_bad="${pom_bad}$(LC_ALL=C comm -3 <(printf '%s' "${parsed:+$parsed$'\n'}") <(printf '%s' "${scanned:+$scanned$'\n'}") |
+      LC_ALL=C awk -F'\t' '$1 == "" { print "    audit:   " $2 "=" $3; next } { print "    xmllint: " $1 "=" $2 }')"$'\n'
+  fi
 done < <(
   git -C "$repo" diff --name-only -z --no-ext-diff "$base" -- pom.xml '*/pom.xml' 2>/dev/null
   git -C "$repo" ls-files --others --exclude-standard -z -- pom.xml '*/pom.xml' 2>/dev/null
@@ -601,14 +649,45 @@ for f in .mvn/maven.config .mvn/jvm.config; do
   done < <(printf '%s\n' "$found")
 done
 
-# What the analyzers take as a suppression, measured on 2026-10-11 by scanning planted lines on
-# this server rather than assumed. sonar-java: NOSONAR anywhere in a comment, and
-# @SuppressWarnings resolved by type, so `@ SuppressWarnings` and `@java.lang.SuppressWarnings`
-# count. SonarJS: a comment starting with NOSONAR in any case, every ESLint disable directive, and
-# an inline `/* eslint rule: off */` config, which hides an issue without a warning. The CSS
+# What the analyzers take as a suppression, measured by scanning planted lines on this server
+# rather than assumed (2026-10-11; the forms marked * on 2026-10-12, each hiding a planted issue
+# its control showed). sonar-java: NOSONAR anywhere in a comment; @SuppressWarnings resolved by
+# type, so `@ SuppressWarnings` and `@java.lang.SuppressWarnings` count, with values resolved as
+# constants, so `"a" + "ll"`* and a constant holding "all"* suppress everything, as does a "all"
+# on the line after the annotation's reason*; @Generated*, and any of these spelled with \u
+# escapes*. SonarJS: a comment starting with NOSONAR in any case, upper-cased the way JavaScript
+# does it, which turns U+017F into S (noſonar*, the only code point that becomes a letter of
+# NOSONAR); every ESLint directive, the comment trimmed of any space JavaScript knows first, so
+# a block comment whose text starts with `eslint` on a later line* or after U+00A0* is one; an
+# inline `/* eslint rule: off */` config, which hides an issue without a warning. The CSS
 # analyzer: NOSONAR and stylelint's disable directives. Every form is read in every file: a match
 # stricter than one analyzer's costs a reason, a looser one a silent green.
-SUPPRESSION_WORDS='SuppressWarnings|[Nn][Oo][Ss][Oo][Nn][Aa][Rr]|eslint|stylelint'
+LONG_S=$'\xc5\xbf'
+NOSONAR="[Nn][Oo]([Ss]|$LONG_S)[Oo][Nn][Aa][Rr]"
+SUPPRESSION_WORDS="SuppressWarnings|$NOSONAR|eslint|stylelint|exported|global|\\\\u"
+
+# The suffixes SonarJS and its CSS analyzer read by default, the files whose comments ESLint and
+# stylelint directives live in.
+JS_CODE='[.](js|jsx|cjs|mjs|vue|ts|tsx|cts|mts|css|less|scss|sass)$'
+
+# ESLint reads a directive from a comment whose trimmed text starts with one of these words and
+# a space or its end; in a line comment, only the two -line forms count. eslint-enable is one too,
+# but it suppresses nothing.
+ESLINT_DIRECTIVE='(eslint(-env|-disable(-next)?-line|-disable)?|exported|globals?)([[:space:]]|[*]/|$)'
+
+# @SuppressWarnings with nothing but string literals for values, all on one line: a constant or
+# an expression can resolve to "all", and a value on a later line escapes the line's reason.
+SW_PREFIX='@[[:space:]]*(java[[:space:]]*[.][[:space:]]*lang[[:space:]]*[.][[:space:]]*)?'
+SW_ANNOTATION="${SW_PREFIX}SuppressWarnings"
+SW_LITERAL='"[^"\\]*"'
+SW_LITERALS="$SW_LITERAL([[:space:]]*,[[:space:]]*$SW_LITERAL)*"
+SW_WELL_FORMED="${SW_ANNOTATION}[[:space:]]*[(][[:space:]]*(value[[:space:]]*=[[:space:]]*)?($SW_LITERAL|[{][[:space:]]*(${SW_LITERALS}[[:space:]]*,?)?[[:space:]]*[}])[[:space:]]*[)]"
+
+# A Java form never accepted: a \u escape for a printable ASCII character, which Java decodes
+# before it reads a token, so it can spell a word the text audit looks for. The escape must start
+# with a backslash that an even number of backslashes precede, as in Java. What an annotation is,
+# @Generated included, javac's parser settles below.
+ASCII_ESCAPE='(^|[^\\])(\\\\)*\\u+(00[2-6][0-9A-Fa-f]|007[0-9A-Ea-e])'
 
 # One grep over the changed set, so a Stop pays a process per file only for the files that
 # carry a suppression at all.
@@ -632,46 +711,71 @@ excluded_paths_ere() {
       -e 's|[*][*]|@ANY@|g' -e 's|[*]|[^/]*|g' -e 's|@DIRS@|(.*/)?|g' -e 's|@ANY@|.*|g' |
     LC_ALL=C awk '{ ere = ere (NR > 1 ? "|" : "") $0 } END { if (NR) print "^(" ere ")$" }'
 }
+excluded=""
+[ -z "$changed" ] || excluded=$(excluded_paths_ere) || audit_failed pom.xml
+
+# Prints the paths of $1 that the root pom's exclusions leave in analysis. They say nothing about
+# the JS project's files.
+not_excluded() {
+  local js_part=""
+  if [ -z "$excluded" ]; then
+    printf '%s\n' "$1"
+    return 0
+  fi
+  [ -z "$js_dir" ] || js_part=$(printf '%s\n' "$1" | LC_ALL=C grep -F -- "$js_dir/" | LC_ALL=C grep -E "^${js_dir//./[.]}/" || true)
+  {
+    printf '%s\n' "$1" | LC_ALL=C grep -vE -e "$excluded"
+    printf '%s\n' "$js_part"
+  } | grep -v '^$' | sort -u
+}
 
 # Code that Sonar never analyzes cannot hide a Sonar finding, so its suppressions are not
 # audited: generators such as jOOQ and openapi-generator put @SuppressWarnings("all") on every
 # class they write. Only exclusions the base already has count. One added in this change is
 # held to the pom audit above and exempts nothing until it is committed, so every exemption
 # rests on an exclusion whose reason has been seen.
-if [ -n "$suppressing" ]; then
-  excluded=$(excluded_paths_ere) || audit_failed pom.xml
-  if [ -n "$excluded" ]; then
-    js_part=""
-    [ -z "$js_dir" ] || js_part=$(printf '%s\n' "$suppressing" | LC_ALL=C grep -F -- "$js_dir/" | LC_ALL=C grep -E "^${js_dir//./[.]}/" || true)
-    suppressing=$(
-      printf '%s\n' "$suppressing" | LC_ALL=C grep -vE -e "$excluded"
-      printf '%s\n' "$js_part"
-    )
-    suppressing=$(printf '%s\n' "$suppressing" | grep -v '^$' | sort -u)
-  fi
-fi
+[ -z "$suppressing" ] || suppressing=$(not_excluded "$suppressing")
 
-# Prints `justified` or `unjustified` for a line holding a suppression, nothing for a line that
-# only names one. Each form on the line needs its own reason: NOSONAR a `:`, `-` or `(` and words
-# after it; @SuppressWarnings a `//` comment, and never "all"; an ESLint or stylelint directive
-# its ` -- description`, ESLint's own syntax, which a decrement such as `x--` does not satisfy.
+# Prints `forbidden`, `justified` or `unjustified` for line $2 of file $1 when it holds a
+# suppression, nothing for a line that only names one. Each form on the line needs its own reason:
+# NOSONAR a `:`, `-` or `(` and words after it; each @SuppressWarnings a `//` comment, string
+# literals for values and never "all"; an ESLint or stylelint directive its ` -- description`,
+# ESLint's own syntax, which a decrement such as `x--` does not satisfy.
 suppression_verdict() {
-  local line="$1" code="${1%%//*}" found=0 reasoned=1
-  if printf '%s' "$line" | LC_ALL=C grep -qE '@[[:space:]]*(java[.]lang[.])?SuppressWarnings'; then
+  local path="$1" line="$2" found=0 reasoned=1 directive=0 uses well
+  case "$path" in
+    *.java)
+      if printf '%s' "$line" | LC_ALL=C grep -qE -e "$ASCII_ESCAPE"; then
+        echo forbidden
+        return 0
+      fi
+      ;;
+  esac
+  uses=$(printf '%s' "$line" |
+    LC_ALL=C grep -oE "($SW_PREFIX)?SuppressWarnings([[:space:]]*[(])?" |
+    LC_ALL=C grep -cE '^@|[(]$' || true)
+  if [ "$uses" -gt 0 ]; then
     found=1
-    if printf '%s' "$code" | LC_ALL=C grep -qE 'SuppressWarnings[[:space:]]*[(][^)]*"all"' ||
+    well=$(printf '%s' "$line" | LC_ALL=C grep -oE "$SW_WELL_FORMED" || true)
+    if [ "$(printf '%s' "$well" | grep -c .)" -ne "$uses" ] || printf '%s' "$well" | grep -qF '"all"' ||
       ! printf '%s' "$line" | LC_ALL=C grep -qE 'SuppressWarnings.*//[[:space:]]*[^[:space:]]'; then
       reasoned=0
     fi
   fi
-  if printf '%s' "$line" | LC_ALL=C grep -qE '(eslint|stylelint)-disable|/[*][[:space:]]*eslint[[:space:]]'; then
+  if printf '%s' "$line" | LC_ALL=C grep -qE '(eslint|stylelint)-disable'; then
+    directive=1
+  elif printf '%s' "$path" | LC_ALL=C grep -qE "$JS_CODE" &&
+    printf '%s' "$line" | LC_ALL=C grep -qE -e "/[*][[:space:]]*$ESLINT_DIRECTIVE" -e "^[[:space:]]*$ESLINT_DIRECTIVE"; then
+    directive=1
+  fi
+  if [ "$directive" -eq 1 ]; then
     found=1
-    printf '%s' "$line" | LC_ALL=C grep -qE '(eslint|stylelint)[^*]*[[:space:]]--+[[:space:]]+[^[:space:]*]' ||
+    printf '%s' "$line" | LC_ALL=C grep -qE '(eslint|stylelint|exported|global)[^*]*[[:space:]]--+[[:space:]]+[^[:space:]*]' ||
       reasoned=0
   fi
-  if printf '%s' "$line" | LC_ALL=C grep -qiE 'nosonar'; then
+  if printf '%s' "$line" | LC_ALL=C grep -qE "$NOSONAR"; then
     found=1
-    printf '%s' "$line" | LC_ALL=C grep -qiE 'nosonar[[:space:]]*[-:(][[:space:]]*[^[:space:]]' ||
+    printf '%s' "$line" | LC_ALL=C grep -qE "${NOSONAR}[[:space:]]*[-:(][[:space:]]*[^[:space:]]" ||
       reasoned=0
   fi
   [ "$found" -eq 1 ] || return 0
@@ -680,25 +784,103 @@ suppression_verdict() {
 
 bad=""
 good=""
+forbidden=""
 while IFS= read -r f; do
   [ -n "$f" ] && [ -f "$repo/$f" ] || continue
   found=$(KEEP="$SUPPRESSION_WORDS" new_lines "$f") || audit_failed "$f"
   while IFS=$'\t' read -r n text; do
     [ -n "$n" ] || continue
     text="${text#"${text%%[![:space:]]*}"}"
-    verdict=$(suppression_verdict "$text")
-    [ -n "$verdict" ] || continue
+    verdict=$(suppression_verdict "$f" "$text")
     entry="  $f:$n: $text"$'\n'
-    if [ "$verdict" = justified ]; then good="${good}${entry}"; else bad="${bad}${entry}"; fi
+    case "$verdict" in
+      justified) good="${good}${entry}" ;;
+      unjustified) bad="${bad}${entry}" ;;
+      forbidden) forbidden="${forbidden}${entry}" ;;
+    esac
   done < <(printf '%s\n' "$found")
 done < <(printf '%s\n' "$suppressing")
 
+# The line audit reads text and sonar-java reads Java: a Unicode escape, an identifier-ignorable
+# character, a comment or a line break inside an annotation hides it from the first and not from
+# the second. So javac's own parser lists every @SuppressWarnings and @Generated of the changed
+# Java files, and each must be one the line audit read as written: on one line, in printable
+# ASCII, with string literals for values, and never @Generated or "all". An entry the line audit
+# already made for that line is not repeated.
+add_once() { # $1 name of the list, $2 path:line, $3 entry
+  case "${!1}" in
+    *"  $2: "*) ;;
+    *) printf -v "$1" '%s  %s: %s\n' "${!1}" "$2" "$3" ;;
+  esac
+}
+java_changed=$(printf '%s\n' "$changed" | LC_ALL=C grep -E '[.]java$' || true)
+java_audited=""
+[ -z "$java_changed" ] || java_audited=$(not_excluded "$java_changed")
+if [ -n "$java_audited" ]; then
+  annotations=$(cd "$repo" && printf '%s\n' "$java_audited" | while IFS= read -r f; do
+    [ -f "$f" ] && printf '%s\0' "$f"
+  done | xargs -0 env -u JAVA_TOOL_OPTIONS -u JDK_JAVA_OPTIONS -u _JAVA_OPTIONS java "$JAVA_ANNOTATIONS") ||
+    audit_failed "the changed Java files (javac's parser, $JAVA_ANNOTATIONS)"
+  while IFS=$'\t' read -r f n kind values shown; do
+    [ -n "$f" ] || continue
+    case "$kind" in
+      generated) add_once forbidden "$f:$n" "$shown" ;;
+      plain)
+        case ",$values," in
+          *,all,*) add_once bad "$f:$n" "$shown" ;;
+        esac
+        ;;
+      *) add_once bad "$f:$n" "$shown (javac reads this @SuppressWarnings, the line audit cannot: write it on one line, in plain ASCII, with string literals)" ;;
+    esac
+  done < <(printf '%s\n' "$annotations")
+fi
+
+# Every changed source file must be analysed. Java under src/main/java or src/test/java, a pom,
+# and the JS project's code, by the suffixes SonarJS and its CSS analyzer index by default (a
+# .d.ts holds declarations only, and SonarJS leaves it out by default), go to the gate, which
+# refuses one its latest analysis holds no component for. Java under the base's root-pom
+# exclusions is not analysed by design, so it must carry a generator's header in its first lines.
+indexed=""
+in_analysis=$(not_excluded "$changed")
+while IFS= read -r f; do
+  [ -n "$f" ] && [ -f "$repo/$f" ] || continue
+  if [ -n "$js_dir" ] && [ "${f#"$js_dir"/}" != "$f" ]; then
+    printf '%s\n' "$f" | LC_ALL=C grep -qE "$JS_CODE" && ! printf '%s\n' "$f" | LC_ALL=C grep -qE '[.]d[.]ts$' &&
+      indexed="${indexed}${f}"$'\n'
+    continue
+  fi
+  case "$f" in
+    pom.xml | */pom.xml) indexed="${indexed}${f}"$'\n' ;;
+    *.java)
+      if ! printf '%s\n' "$in_analysis" | LC_ALL=C grep -qxF -- "$f"; then
+        header=$(head -n 20 "$repo/$f" | LC_ALL=C grep -m 1 -iE 'generated by' | LC_ALL=C sed 's/^[[:space:]]*//')
+        if [ -n "$header" ]; then
+          good="${good}  $f: kept out of analysis by the root pom's sonar.exclusions (header: $header)"$'\n'
+        else
+          forbidden="${forbidden}  $f: kept out of analysis by the root pom's sonar.exclusions, with no generator's header"$'\n'
+        fi
+      elif printf '%s\n' "$f" | LC_ALL=C grep -qE '(^|/)src/(main|test)/java/'; then
+        indexed="${indexed}${f}"$'\n'
+      fi
+      ;;
+  esac
+done < <(printf '%s\n' "$changed")
+
 refuse_unjustified() {
+  if [ -n "$forbidden" ]; then
+    printf 'SONAR GATE: what Sonar honours for every rule, which the gate never accepts:\n%s' "$forbidden" >&2
+    printf '@Generated (javax or jakarta annotation[.processing]) hides every issue of its class or method\n' >&2
+    printf 'from sonar-java: it belongs on generated code alone, which the root pom'"'"'s sonar.exclusions keeps\n' >&2
+    printf 'out of analysis, and code there carries its generator'"'"'s header. In Java, a \\u escape for a\n' >&2
+    printf 'printable ASCII character can spell @Generated or @SuppressWarnings: write the character itself. javac\n' >&2
+    printf 'drops identifier-ignorable characters (U+200B, controls) from a name: the source text shown\n' >&2
+    printf 'escapes every character outside printable ASCII.\n' >&2
+  fi
   if [ -n "$bad" ]; then
-    printf 'SONAR GATE: unjustified suppression(s) added:\n%s' "$bad" >&2
+    printf 'SONAR GATE: unjustified suppression(s) in the changed files:\n%s' "$bad" >&2
     printf 'Suppressing is allowed when Sonar is wrong, but the reason goes on the same line:\n' >&2
     printf '  // NOSONAR: <why this rule does not apply here>\n' >&2
-    printf '  @SuppressWarnings("java:S1234") // <why>\n' >&2
+    printf '  @SuppressWarnings("java:S1234") // <why>     (string literals only, on one line)\n' >&2
     printf '  // eslint-disable-next-line <rule> -- <why>    (stylelint the same)\n' >&2
     printf '@SuppressWarnings("all") is never accepted. Fix the finding or justify it.\n' >&2
   fi
@@ -714,7 +896,7 @@ refuse_unjustified() {
   exit 2
 }
 
-[ -z "${bad}${pom_bad}" ] || refuse_unjustified
+[ -z "${forbidden}${bad}${pom_bad}" ] || refuse_unjustified
 
 reported_file="${TMPDIR:-/tmp}/claude-sonar-reported-${repo_key}"
 
@@ -728,7 +910,7 @@ report_suppressions() {
   fi
   key=$(printf '%s' "$all" | LC_ALL=C sed 's/^\(  [^:]*\):[0-9]*: /\1: /' | shasum -a 256 | cut -d' ' -f1)
   [ "$key" != "$(cat "$reported_file" 2>/dev/null)" ] || return 0
-  tell_user "Sonar gate: this change adds Sonar suppressions, each with its reason:"$'\n'"$all" &&
+  tell_user "Sonar gate: this change adds Sonar suppressions or changes code kept out of analysis, each with its reason:"$'\n'"$all" &&
     printf '%s\n' "$key" >"$reported_file"
 }
 
@@ -764,11 +946,14 @@ rounds=$(cat "$counter" 2>/dev/null || echo 0)
 out=$(mktemp "${TMPDIR:-/tmp}/claude-sonar-out.XXXXXX")
 err=$(mktemp "${TMPDIR:-/tmp}/claude-sonar-err.XXXXXX")
 pat=$(mktemp "${TMPDIR:-/tmp}/claude-sonar-files.XXXXXX")
-trap 'rm -f "$out" "$err" "$pat" "$out.timeout"' EXIT
+idx=$(mktemp "${TMPDIR:-/tmp}/claude-sonar-indexed.XXXXXX")
+trap 'rm -f "$out" "$err" "$pat" "$idx" "$out.timeout"' EXIT
 printf '%s\n' "$changed" >"$pat"
+printf '%s' "$indexed" >"$idx"
 
 gate_args=(--project-dir "$repo" --no-boot)
 [ "$scope" = project ] || gate_args+=(--files "$pat")
+[ -z "$indexed" ] || gate_args+=(--indexed "$idx")
 timed_out="${out}.timeout"
 
 # Claude Code cancels a Stop hook at its timeout (400 s in settings.json) and discards its
