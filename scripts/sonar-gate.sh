@@ -16,7 +16,8 @@
 # last analysis from here is not scanned again: its findings are read from that analysis.
 #
 # What counts: every issue, the ones marked accepted or false positive on the server included,
-# every duplicated block in main code, and every open security hotspot, reviewed or not.
+# every duplicated block in main code, every open security hotspot, reviewed or not, and with
+# --indexed every listed file the analysis left out.
 # Duplication is a measure and hotspots have their own API, so a gate that counted issues alone
 # saw neither; the IDE shows hotspots.
 #
@@ -28,16 +29,17 @@
 # `ide-exclusions = PATTERN, …`. Every run checks the server still matches and exits 1 when it
 # does not: every listed rule active with the listed values and the defaults elsewhere, no other
 # rule activated, every Sonar way rule still active, the built-in Sonar way for every other
-# language, no other setting of a project key's own, and nothing that narrows analysis set at
-# instance level. A green therefore never comes from another rule set than the one committed.
+# language, no other setting of a project key's own, and no instance setting outside a short list
+# of ones that change no analysis. With a rules file, a green therefore never comes from another
+# rule set than the one committed; without one, only the settings are checked, not the profiles.
 #
 # Default mode compiles main and test sources but runs no tests. --with-coverage runs the
 # full Maven build and evaluates the Maven project's quality gate, the only mode that sees
 # coverage conditions.
 #
 # Usage:
-#     sonar-gate.sh [--project-dir DIR] [--with-coverage] [--facets]
-#                   [--max-findings N] [--files PATH] [--no-boot] [--dry-run] [-h|--help]
+#     sonar-gate.sh [--project-dir DIR] [--with-coverage] [--facets] [--max-findings N]
+#                   [--files PATH] [--indexed PATH] [--no-boot] [--dry-run] [-h|--help]
 #     sonar-gate.sh --provision [--project-dir DIR] [--no-boot] [--dry-run]
 #
 #     --files      restrict findings to the repo-relative paths listed in PATH, one per line,
@@ -45,11 +47,15 @@
 #                  follow the filtered set, so a project with issues elsewhere still exits clean
 #                  when the listed files are clean. Past the 10000 open issues the API serves,
 #                  the set cannot be counted: exit 1.
+#     --indexed    require each repo-relative path listed in PATH, one per line, to be a file of
+#                  its project's latest analysis; one that is not counts as a finding. An
+#                  exclusion, a source root, a size limit, a language setting or a module missing
+#                  from the build keeps a file out of analysis, and all its findings with it.
 #     --no-boot    fail instead of starting the container. For non-interactive callers,
 #                  which should not have infrastructure appear underneath them.
-#     --provision  make the server's profiles and project keys match the rules file, with an
-#                  administrator's user token; with --dry-run, print what would change and
-#                  change nothing.
+#     --provision  make the server's profiles and project keys match the rules file and
+#                  .sonar-gate, with an administrator's user token; with --dry-run, print what
+#                  would change and change nothing.
 #
 # Environment:
 #     SONAR_HOST_URL                       default http://localhost:9000
@@ -85,6 +91,7 @@ DRY_RUN=0
 NO_BOOT=0
 PROVISION=0
 FILES_LIST=""
+INDEXED_LIST=""
 
 EXIT_CLEAN=0
 EXIT_CANNOT_RUN=1
@@ -127,6 +134,10 @@ while [ $# -gt 0 ]; do
       FILES_LIST="${2:-}"
       shift 2
       ;;
+    --indexed)
+      INDEXED_LIST="${2:-}"
+      shift 2
+      ;;
     --no-boot)
       NO_BOOT=1
       shift
@@ -160,6 +171,11 @@ FILES_JSON="null"
 if [ -n "$FILES_LIST" ]; then
   [ -r "$FILES_LIST" ] || die "--files: cannot read $FILES_LIST"
   FILES_JSON=$("$JQ" -R -s -c 'split("\n") | map(select(length > 0))' <"$FILES_LIST")
+fi
+INDEXED_JSON="[]"
+if [ -n "$INDEXED_LIST" ]; then
+  [ -r "$INDEXED_LIST" ] || die "--indexed: cannot read $INDEXED_LIST"
+  INDEXED_JSON=$("$JQ" -R -s -c 'split("\n") | map(select(length > 0))' <"$INDEXED_LIST")
 fi
 
 [ -n "$PROJECT_DIR" ] || PROJECT_DIR="$PWD"
@@ -519,9 +535,17 @@ expected_settings() { # $1 project index
   fi
 }
 
-# Settings that narrow what an analysis reads or reports, checked at instance level, where a
-# value set there reaches every project and the forced sonar.global.* ones beat any scanner's.
-NARROWING_KEY='^sonar[.](issue[.](ignore|enforce)[.].*|([A-Za-z0-9_-]+[.])*(exclusions|inclusions|skip|sources|tests|suffixes|maxFileSize|limit))$'
+# The only settings the gate accepts set at instance level, where a value reaches every project
+# and the forced sonar.global.* ones beat any scanner's: each changes no analysis. An allowlist,
+# since a list of the narrowing keys would miss the next one a SonarQube release or a plugin adds.
+#   sonar.core.id, sonar.core.startTime    the server's identity, which it writes itself
+#   sonar.core.serverBaseURL               the address in the links it gives
+#   sonar.forceAuthentication              who may browse
+#   sonar.multi-quality-mode.enabled       how issues are classified; the same rules raise them
+#   sonar.qualityProfiles.allowDisableInheritedRules
+#                                          whether a child profile may deactivate a rule it
+#                                          inherits, which verify_profiles refuses whatever it says
+INSTANCE_ALLOWED='^sonar[.](core[.](id|startTime|serverBaseURL)|forceAuthentication|multi-quality-mode[.]enabled|qualityProfiles[.]allowDisableInheritedRules)$'
 
 # Prints `set <key>` for each setting project $2 carries of its own off what it should, and
 # `missing <key>` for each it should carry and does not. Any setting of its own counts: listing
@@ -538,12 +562,13 @@ settings_drift() { # $1 token, $2 project index
       ( $want | keys[] | . as $k | select($set | any(.key == $k) | not) | "missing\t\(.)" )'
 }
 
-# Prints `instance <key>` for each setting that narrows analysis set at instance level.
+# Prints `instance <key>` for each setting set at instance level that INSTANCE_ALLOWED does not
+# hold.
 instance_drift() { # $1 token
   api_get "$1" api/settings/values |
-    "$JQ" -r --arg re "$NARROWING_KEY" '
+    "$JQ" -r --arg re "$INSTANCE_ALLOWED" '
       if (.settings | type) != "array" then error("no settings list") else . end
-      | .settings[] | select(.inherited != true) | select(.key | test($re)) | "instance\t\(.key)"'
+      | .settings[] | select(.inherited != true) | select(.key | test($re) | not) | "instance\t\(.key)"'
 }
 
 # The IDE's exclusions sit on the Maven project's key, where only the root pom's own
@@ -557,25 +582,39 @@ check_ide_exclusions() {
 }
 
 drift_refusal() { # $1 what differs, $2 the drift lines
-  die "$1 differs from what the repository says (.sonar-gate, $RULES_FILE):
+  die "$1 differs from what the repository says (.sonar-gate${RULES_FILE:+, $RULES_FILE}):
 $(printf '%s\n' "$2" | tr '\t' ' ' | sed -e 's/ *$//' -e 's/^/  /')
 --provision makes the server match the repository. When the repository lost a rule, a value or
 an exclusion, or gives a Sonar way rule other parameters (override), that may narrow the gate:
 the owner decides it before anyone provisions it."
 }
 
-# Fails unless every language of the rules file has its profile, a child of Sonar way holding its
-# parent's rules plus exactly the listed ones; every project key uses those profiles, and the
-# built-in Sonar way for every other language; no key carries a setting .sonar-gate does not
-# give it; and the instance sets nothing that narrows analysis.
-verify_profiles() { # $1 token
-  [ -n "$RULES_FILE" ] || return 0
-  local lang profile pkey parent drift i bad
+# Fails unless the instance sets nothing outside INSTANCE_ALLOWED; no project key carries a
+# setting .sonar-gate does not give it; and, with a rules file, every language of it has its
+# profile, a child of Sonar way holding its parent's rules plus exactly the listed ones, and every
+# project key uses those profiles, and the built-in Sonar way for every other language.
+verify_server() { # $1 token
+  local drift i
   check_ide_exclusions
   drift=$(instance_drift "$1") || die "could not read the instance's settings"
-  [ -z "$drift" ] || die "the instance sets what narrows every analysis on it:
+  [ -z "$drift" ] || die "the instance sets what may change every analysis on it:
 $(printf '%s\n' "$drift" | cut -f2 | sed 's/^/  /')
-An administrator set it in the server's settings; the gate does not undo it, the owner decides."
+An administrator set it in the server's settings; the gate does not undo it, the owner decides.
+A setting that changes no analysis belongs in INSTANCE_ALLOWED, in sonar-gate.sh."
+  [ -z "$RULES_FILE" ] || verify_profiles "$1"
+  i=0
+  while [ "$i" -lt "${#P_KIND[@]}" ]; do
+    drift=$(settings_drift "$1" "$i") || die "could not read the settings of ${P_KEY[$i]}"
+    [ -z "$drift" ] || drift_refusal "${P_KEY[$i]}'s settings" "$drift"
+    i=$((i + 1))
+  done
+}
+
+# Fails unless every language of the rules file has its profile, a child of Sonar way holding its
+# parent's rules plus exactly the listed ones, and every project key uses those profiles, and the
+# built-in Sonar way for every other language.
+verify_profiles() { # $1 token
+  local lang profile pkey parent drift i bad
   for lang in $LANGS; do
     profile=$(profile_json "$1" "$lang") || die "could not read the $lang quality profiles"
     pkey=$("$JQ" -r '.key // empty' <<<"$profile")
@@ -608,8 +647,6 @@ An administrator set it in the server's settings; the gate does not undo it, the
     [ -z "$bad" ] || die "${P_KEY[$i]} is not on the repository's profiles:
 $(printf '%s\n' "$bad" | sed 's/^/  /')
 run: sonar-gate.sh --provision"
-    drift=$(settings_drift "$1" "$i") || die "could not read the settings of ${P_KEY[$i]}"
-    [ -z "$drift" ] || drift_refusal "${P_KEY[$i]}'s settings" "$drift"
     i=$((i + 1))
   done
 }
@@ -649,16 +686,11 @@ provision_settings() { # $1 project index
   done < <(printf '%s\n' "$drift")
 }
 
-provision() {
-  [ -n "$RULES_FILE" ] || die "--provision needs a rules file: add \`rules = FILE\` to .sonar-gate"
-  ADMIN_TOKEN=$(read_token "${SONAR_ADMIN_TOKEN:-}" "$ADMIN_KEYCHAIN_SERVICE") ||
-    die "no administrator token. Sign in at $HOST_URL as an administrator, mint a User token
-  (not a Global Analysis Token, which cannot manage profiles) at $HOST_URL/account/security,
-  and store it: security add-generic-password -s $ADMIN_KEYCHAIN_SERVICE -a \"\$USER\" -w"
-
+# Makes the server's "<repo> way" profiles hold Sonar way plus exactly the rules file's rules.
+provision_profiles() {
   # Every listed rule and parameter exists here, so a rule's twin in another language is
   # checked against this server's catalogue rather than assumed.
-  local rule keys k body missing="" lang profile pkey parent drift action params i
+  local rule keys k body missing="" lang profile pkey parent drift action params
   while IFS=$'\t' read -r rule keys; do
     body=$(api_get "$ADMIN_TOKEN" api/rules/show --data-urlencode "key=$rule") ||
       die "could not read rule $rule"
@@ -720,6 +752,16 @@ $missing"
       esac
     done < <(printf '%s\n' "$drift" | grep -v '^$' || true)
   done
+}
+
+provision() {
+  ADMIN_TOKEN=$(read_token "${SONAR_ADMIN_TOKEN:-}" "$ADMIN_KEYCHAIN_SERVICE") ||
+    die "no administrator token. Sign in at $HOST_URL as an administrator, mint a User token
+  (not a Global Analysis Token, which cannot manage profiles) at $HOST_URL/account/security,
+  and store it: security add-generic-password -s $ADMIN_KEYCHAIN_SERVICE -a \"\$USER\" -w"
+
+  local body lang profile pkey i
+  [ -z "$RULES_FILE" ] || provision_profiles
 
   i=0
   while [ "$i" -lt "${#P_KIND[@]}" ]; do
@@ -751,8 +793,8 @@ $missing"
   if [ "$DRY_RUN" -eq 1 ]; then
     log "dry run: nothing changed on $HOST_URL"
   else
-    verify_profiles "$ADMIN_TOKEN"
-    log "the server matches .sonar-gate and $RULES_FILE"
+    verify_server "$ADMIN_TOKEN"
+    log "the server matches .sonar-gate${RULES_FILE:+ and $RULES_FILE}"
   fi
 }
 
@@ -840,11 +882,16 @@ wait_for_analysis() { # $1 report-task.txt, $2 project key
 }
 
 # Prints `-u NAME` for every exported variable a scanner would read analysis properties from.
+# The JVM reads JAVA_TOOL_OPTIONS and _JAVA_OPTIONS, and the java launcher JDK_JAVA_OPTIONS, so a
+# -Dsonar.* in any of them reaches both scanners: measured 2026-10-12, a
+# -Dsonar.java.file.suffixes=.none there turned a file with two findings clean.
 scanner_env_unset() {
   local name
   for name in $(compgen -e); do
     case "$name" in
-      SONAR* | npm_config_sonar* | MAVEN_OPTS | MAVEN_ARGS) printf '%s\n' -u "$name" ;;
+      SONAR* | npm_config_sonar* | MAVEN_OPTS | MAVEN_ARGS | JAVA_TOOL_OPTIONS | JDK_JAVA_OPTIONS | _JAVA_OPTIONS)
+        printf '%s\n' -u "$name"
+        ;;
     esac
   done
 }
@@ -877,6 +924,9 @@ scan_maven() { # $1 project index
   wait_for_analysis "$ROOT/target/sonar/report-task.txt" "${P_KEY[$1]}"
 }
 
+# SonarJS skips 140 of its rules on a file it detects as generated, from the project's own
+# codegen manifests (an .openapi-generator/FILES listing it, for one), so a manifest in the
+# repository could silence hand-written code. Its log names the switch that turns detection off.
 scan_js() { # $1 project index
   command -v npx >/dev/null 2>&1 || die "npx not found; the JavaScript scanner runs through it"
   local work="$SCRATCH/js-work" unset=()
@@ -887,6 +937,7 @@ scan_js() { # $1 project index
     -Dsonar.host.url="$HOST_URL" \
     -Dsonar.projectKey="${P_KEY[$1]}" \
     -Dsonar.projectName="${P_NAME[$1]}" \
+    -Dsonar.javascript.detectGeneratedCode=false \
     -Dsonar.working.directory="$work") >"$SCRATCH/build.log" 2>&1; then
     tail -30 "$SCRATCH/build.log" >&2
     die "scanner failed on ${P_KEY[$1]}"
@@ -972,6 +1023,40 @@ hotspot_findings() {
   printf '%s' "$out"
 }
 
+# Prints [{path, line, rule, message, rank}], one per --indexed path of project $1 that its latest
+# analysis holds no file for, main or test.
+unanalysed_findings() {
+  local page=1 body total wanted
+  wanted=$("$JQ" -r --arg p "${P_PREFIX[$1]}" --arg js "${JS_DIR:+$JS_DIR/}" --arg kind "${P_KIND[$1]}" '
+    .[] | select(if $kind == "js" then startswith($p) else ($js == "" or (startswith($js) | not)) end)' \
+    <<<"$INDEXED_JSON")
+  if [ -z "$wanted" ]; then
+    printf '[]'
+    return 0
+  fi
+  : >"$SCRATCH/components"
+  while :; do
+    body=$(api_get "$READ_TOKEN" api/components/tree --data-urlencode "component=${P_KEY[$1]}" \
+      --data-urlencode "qualifiers=FIL,UTS" --data-urlencode "ps=500" --data-urlencode "p=$page") ||
+      die "could not read the files of ${P_KEY[$1]}"
+    total=$(printf '%s' "$body" | "$JQ" -r \
+      'if (.components | type) == "array" then .paging.total // "" else "" end' 2>/dev/null) ||
+      total=""
+    case "$total" in
+      '' | *[!0-9]*) die "the components API returned no file list for ${P_KEY[$1]}: $(server_errors "$body")" ;;
+    esac
+    [ "$total" -le 10000 ] || die "${P_KEY[$1]} has $total files and the API serves only 10000"
+    printf '%s' "$body" | "$JQ" -r --arg pre "${P_PREFIX[$1]}" \
+      '.components[] | $pre + (.key | sub("^[^:]*:"; ""))' >>"$SCRATCH/components"
+    [ $((page * 500)) -lt "$total" ] || break
+    page=$((page + 1))
+  done
+  { printf '%s\n' "$wanted" | LC_ALL=C grep -vxF -f "$SCRATCH/components" || true; } |
+    "$JQ" -R -s -c --arg key "${P_KEY[$1]}" '
+      split("\n") | map(select(length > 0)) | map({path: ., line: 0, rule: "not-analysed", rank: 0,
+        message: "Sonar did not analyse this file: \($key)'"'"'s latest analysis holds no file for it. An exclusion, a source root, a size limit, a language setting or a module missing from the build keeps it out."})'
+}
+
 # ── main ─────────────────────────────────────────────────────────────────────
 
 ensure_sonar_up
@@ -1001,7 +1086,7 @@ TOKEN=$(read_token "${SONAR_TOKEN:-}" "$KEYCHAIN_SERVICE") || die "no analysis t
 # holds one, which --provision needs anyway.
 READ_TOKEN=$(read_token "${SONAR_ADMIN_TOKEN:-}" "$ADMIN_KEYCHAIN_SERVICE") || READ_TOKEN="$TOKEN"
 
-verify_profiles "$READ_TOKEN"
+verify_server "$READ_TOKEN"
 
 # With --files, only the projects holding a listed file matter.
 RELEVANT=()
@@ -1012,9 +1097,9 @@ i=0
 while [ "$i" -lt "${#P_KIND[@]}" ]; do
   holds="true"
   if [ -n "$FILES_LIST" ]; then
-    holds=$("$JQ" -r --arg p "${P_PREFIX[$i]}" --arg js "${JS_DIR:+$JS_DIR/}" --arg kind "${P_KIND[$i]}" '
-      any(.[]; if $kind == "js" then startswith($p) else ($js == "" or (startswith($js) | not)) end)' \
-      <<<"$FILES_JSON")
+    holds=$("$JQ" -r -n --arg p "${P_PREFIX[$i]}" --arg js "${JS_DIR:+$JS_DIR/}" --arg kind "${P_KIND[$i]}" \
+      --argjson files "$FILES_JSON" --argjson indexed "$INDEXED_JSON" '
+      any($files[], $indexed[]; if $kind == "js" then startswith($p) else ($js == "" or (startswith($js) | not)) end)')
   fi
   if [ "$holds" = "true" ]; then
     RELEVANT+=("$i")
@@ -1105,6 +1190,13 @@ for i in "${RELEVANT[@]}"; do
 done
 HOTSPOT_COUNT=$("$JQ" length <<<"$hotspots")
 
+unanalysed="[]"
+for i in "${RELEVANT[@]}"; do
+  more=$(unanalysed_findings "$i")
+  unanalysed=$(printf '%s\n%s' "$unanalysed" "$more" | "$JQ" -s -c 'add')
+done
+UNANALYSED_COUNT=$("$JQ" length <<<"$unanalysed")
+
 # The reads above take a while, and another run's analysis of the same key could land in the
 # meantime: the findings read would then be partly its.
 for i in "${RELEVANT[@]}"; do
@@ -1120,7 +1212,7 @@ if [ -n "$FILES_LIST" ]; then
 else
   ISSUE_COUNT=$("$JQ" -r '.total // 0' "$SCRATCH/issues.json")
 fi
-TOTAL=$((ISSUE_COUNT + DUP_COUNT + HOTSPOT_COUNT))
+TOTAL=$((ISSUE_COUNT + DUP_COUNT + HOTSPOT_COUNT + UNANALYSED_COUNT))
 
 if [ "$SHOW_FACETS" -eq 1 ]; then
   api_issues --data-urlencode "facets=rules,impactSeverities,impactSoftwareQualities" \
@@ -1129,6 +1221,7 @@ if [ "$SHOW_FACETS" -eq 1 ]; then
                 (.values[]? | select(.count > 0) | "  \(.count)\t\(.val)")'
   printf -- '-- duplications --\n  %s\tduplicated blocks\n' "$DUP_COUNT"
   printf -- '-- security hotspots --\n  %s\thotspots\n' "$HOTSPOT_COUNT"
+  printf -- '-- not analysed --\n  %s\tlisted files\n' "$UNANALYSED_COUNT"
 fi
 
 # A gate can fail on conditions no issue represents, such as coverage, so issue count alone is
@@ -1157,8 +1250,9 @@ if [ "$TOTAL" -eq 0 ]; then
 fi
 
 if [ "$SHOW_FACETS" -eq 0 ]; then
-  "$JQ" -r --argjson dups "$dups" --argjson hotspots "$hotspots" --argjson n "$MAX_FINDINGS" '
-    (.findings + $dups + $hotspots) | sort_by(.rank)[:$n][]
+  "$JQ" -r --argjson dups "$dups" --argjson hotspots "$hotspots" --argjson unanalysed "$unanalysed" \
+    --argjson n "$MAX_FINDINGS" '
+    (.findings + $dups + $hotspots + $unanalysed) | sort_by(.rank)[:$n][]
     | "  \(.path):\(.line // 0) [\(.rule)] \(.message)"' "$SCRATCH/issues.json"
   if [ "$TOTAL" -gt "$MAX_FINDINGS" ]; then
     printf '  ... and %s more. Full list: %s/project/issues?id=%s\n' \
@@ -1166,5 +1260,5 @@ if [ "$SHOW_FACETS" -eq 0 ]; then
   fi
 fi
 
-log "$TOTAL finding(s) on $KEYS ($ISSUE_COUNT issue(s), $DUP_COUNT duplicated block(s), $HOTSPOT_COUNT security hotspot(s))"
+log "$TOTAL finding(s) on $KEYS ($ISSUE_COUNT issue(s), $DUP_COUNT duplicated block(s), $HOTSPOT_COUNT security hotspot(s), $UNANALYSED_COUNT file(s) not analysed)"
 exit "$EXIT_FINDINGS"
