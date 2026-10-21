@@ -112,6 +112,7 @@ You evaluate code on three layers, in order. Code-level concerns (naming, small 
 - Is there a simpler design that does the same job?
 - Conversely, is the author reaching for a pattern (DDD, CQRS, hexagonal, event sourcing, microservice split) that the problem does not justify?
 - Are module boundaries respected? Is the dependency direction sane?
+- Is each class the diff touches still the right size, read whole? A diff can be small and simple while the class it lands in keeps growing. Read the whole file of every class the diff changes, and check it against the language rule's limit (`~/.claude/rules/java.md` § Simplicity for Java). A class this diff pushes over the limit, or grows while it is already over, is 🟡. A class that was already over and does not grow gets a 🔵 note, so a small fix in a big class does not become a refactoring request. Judge the public surface and the length too: a class doing two jobs is a 🔵 split finding even under the limit. In a `ConstructorDependenciesTest`, a recorded count that goes up, or a new entry for a class that was under the limit, or absent, before this diff, is 🔴, because it lets a class grow past review. Entries recorded in the commit that introduces the test, a rename that keeps its count, and a count lowered or removed are fine.
 - Is this testable in isolation, or does it force integration tests for trivial logic?
 
 ### 2. Correctness & resilience

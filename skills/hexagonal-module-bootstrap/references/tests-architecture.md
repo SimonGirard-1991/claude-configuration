@@ -16,6 +16,7 @@ Using both is fine and gives belt-and-braces coverage.
 - ArchUnit rules
 - Multi-BC boundary rules
 - Naming conventions enforced
+- Constructor dependencies
 - Notes
 - Variants
 
@@ -180,14 +181,95 @@ void controllers_live_in_web_package() {
 }
 ```
 
+## Constructor dependencies
+
+A bean takes at most seven constructor dependencies (`~/.claude/rules/java.md` § Simplicity).
+Sonar's java:S107 cannot keep this limit. It skips a constructor marked `@Autowired` or
+`@Inject`, and it keeps no record of the classes that were already over, so it cannot let
+them shrink step by step. The test records each bean that is over the limit today with its
+exact count.
+
+```java
+// src/test/java/com/company/ecom/architecture/ConstructorDependenciesTest.java
+package com.company.ecom.architecture;
+
+import com.tngtech.archunit.core.domain.JavaClass;
+import com.tngtech.archunit.core.domain.JavaClasses;
+import com.tngtech.archunit.core.importer.ClassFileImporter;
+import com.tngtech.archunit.core.importer.ImportOption;
+import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.Bean;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+import java.util.Map;
+
+import static java.util.Map.entry;
+import static java.util.stream.Collectors.toMap;
+import static org.assertj.core.api.Assertions.assertThat;
+
+class ConstructorDependenciesTest {
+
+  private static final int LIMIT = 7;
+
+  private static final Map<String, Integer> OVER_THE_LIMIT_TODAY = Map.ofEntries(
+      entry("com.company.ecom.order.application.OrderService", 9));
+
+  private static final JavaClasses APP = new ClassFileImporter()
+      .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+      .importPackages("com.company.ecom");
+
+  @Test
+  void only_the_recorded_beans_exceed_the_limit_and_by_their_recorded_count() {
+    // Act
+    List<JavaClass> beans = APP.stream()
+        .filter(ConstructorDependenciesTest::isBean)
+        .toList();
+    Map<String, Integer> overTheLimit = beans.stream()
+        .filter(bean -> dependencies(bean) > LIMIT)
+        .collect(toMap(JavaClass::getName, ConstructorDependenciesTest::dependencies));
+
+    // Assert
+    assertThat(beans).isNotEmpty();
+    assertThat(overTheLimit).containsExactlyInAnyOrderEntriesOf(OVER_THE_LIMIT_TODAY);
+  }
+
+  private static boolean isBean(JavaClass type) {
+    return type.isMetaAnnotatedWith(Component.class)
+        || type.getConstructorCallsToSelf().stream()
+            .anyMatch(call -> call.getOrigin().isAnnotatedWith(Bean.class)
+                && type.isAssignableTo(call.getOrigin().getRawReturnType().getName()));
+  }
+
+  private static int dependencies(JavaClass bean) {
+    return bean.getConstructors().stream()
+        .mapToInt(constructor -> constructor.getRawParameterTypes().size())
+        .max()
+        .orElse(0);
+  }
+}
+```
+
+The test fails until the record matches the code. That covers a new bean over the limit, a
+recorded bean that grew, and one that shrank or dropped under the limit. When a bean shrinks,
+lower its count or remove its entry, so the limit only tightens. The test also fails when it
+finds no bean at all, so a wrong package name cannot keep it green.
+
+A bean is a class annotated with `@Component` or anything built on it (`@Service`,
+`@Repository`, `@RestController`, `@Configuration`, a custom stereotype), or a class that a
+`@Bean` method constructs and returns. Its count is the parameter count of its largest constructor. Field
+injection escapes the count, so pair this test with ArchUnit's
+`GeneralCodingRules.NO_CLASSES_SHOULD_USE_FIELD_INJECTION`.
+
 ## Notes
 
 - **Run as part of the regular test suite**, not separately. Architecture drift happens fastest when the check isn't in the main pipeline.
 - **Fast**: ArchUnit scans compiled classes; typically <1 second even on large codebases.
 - **Add rules incrementally**. A legacy codebase won't pass every rule on day one — freeze violations with `FreezingArchRule` and fail on *new* violations only.
+- **A count is recorded in the test, not frozen.** `FreezingArchRule` matches a violation by its text. With the count in the message, any change to the count fails as a new violation, and only `freeze.refreeze=true` moves the record, which re-records every frozen rule in that run. Without the count in the message, a recorded class grows unseen.
 - **Pair with Modulith** for its out-of-the-box "no cycles" and "allowed dependencies" checks, and use ArchUnit for everything else.
 
 ## Variants
 
-- **Without Spring**: skip Modulith; ArchUnit covers everything.
+- **Without Spring**: skip Modulith; ArchUnit covers everything. In `ConstructorDependenciesTest`, replace `Component.class` with the framework's bean annotation (`jakarta.inject.Singleton` on Micronaut, `jakarta.enterprise.context.ApplicationScoped` on Quarkus). Replace `Bean.class` with `jakarta.enterprise.inject.Produces` on Quarkus, and drop the `@Bean` clause on Micronaut. Plain Java with no container has no annotation to select beans by: select the application services by package instead.
 - **Multi-module Maven/Gradle**: POM/build.gradle dependencies already enforce much of this at compile time. Use ArchUnit for intra-module rules (e.g., no framework in `domain/`).

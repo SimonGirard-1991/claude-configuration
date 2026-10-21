@@ -91,6 +91,23 @@ skills named.
 6. **Throughput** — stateless services, partitioned consumers, pooled connections.
    *(Owned here.)*
 
+## Simplicity
+
+- Before adding a constructor dependency to a class, read the whole class. A bean takes at
+  most 7 constructor dependencies. The test in `hexagonal-module-bootstrap` →
+  `references/tests-architecture.md` § Constructor dependencies enforces the limit; in a
+  repo without it, count by hand. When one more would pass the limit, split the class by
+  use case first. Never raise a recorded count, or record a new class, to get a change
+  through.
+- Prefer a type to a comment. When a comment explains a format, a unit or an encoding,
+  introduce a value object instead. Two primitives that always travel together are one
+  record.
+- A boolean flag or a positional `null` that selects behaviour becomes two methods.
+- Extract an abstraction at its third use, not before. A block the Sonar gate reports as
+  duplicated is fixed at its second copy.
+- Deleting code is a valid outcome of any task. The hand-back reports the lines removed
+  as well as the lines added.
+
 ## Delegated expertise
 Before designing, implementing, advising or reviewing in hexagonal/DDD, observability,
 security, reliability/messaging, performance or testing, load the matching `java-*` or

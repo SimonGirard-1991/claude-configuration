@@ -42,6 +42,52 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **A bean takes at most seven constructor dependencies, and the reviewer judges each touched
+  class whole** (2026-10-21). PersonalFinance's application services had grown to 14 fields
+  (SeedImporter), 13 (InvitationService) and 11 (InstrumentService). Each diff was simple, so
+  each passed review. The Sonar gate did not report them because S107, the parameter-count
+  rule, is not in PersonalFinance's `sonar-rules.txt`. Their constructors carry no
+  annotation, so S107 would have flagged all three. Four changes came out of it:
+  - **The limit is a test.** `hexagonal-module-bootstrap` → `tests-architecture.md` §
+    Constructor dependencies records each bean over the limit with its exact count, and fails
+    until the record matches the code. The template was compiled and run against ArchUnit
+    1.4.1 on eight fixture sets. An exact match passed. A new bean, a bean that grew, a bean
+    that shrank, a bean that dropped under the limit, a 9-parameter class built by a `@Bean`
+    method, and an import with no bean at all each failed, with a message naming the entry.
+    A plain class with 10 parameters was not counted, and neither was an 8-component record
+    that a `@Bean` method only passes as an argument.
+  - **`rules/java.md` § Simplicity** states the limit and how to split, and adds four habits:
+    a type over a comment, two methods over a selector flag, the rule of three for
+    abstractions only, and deletion reported in the hand-back.
+  - **`code-reviewer` reads every touched class whole.** A class the diff pushes over the
+    limit, or grows while already over, is 🟡. One already over that does not grow is a 🔵
+    note, so a small fix does not become a refactor. A recorded count that goes up, or a new
+    entry for a class that was under the limit, is 🔴. The entries recorded when the test is
+    introduced, and renames, are not.
+  - **`CLAUDE.md` asks for plain sentences** in the comments that stay.
+
+  The first review caught two errors in this change. The S107 rationale had cited its
+  `@Autowired` and `@Inject` exemption (sonar-java's `TooManyParametersCheck`), which does not
+  apply to PersonalFinance's constructors. The first template passed when it found no bean,
+  because a stream over `JavaClasses` loses ArchUnit's `failOnEmptyShould`.
+
+  **Rejected:**
+  - S107 in the rules file. It skips constructors marked `@Autowired` or `@Inject`, and it
+    keeps no record of the classes already over. Turned on, it blocks each of them the next
+    time the gate sees it, instead of letting them shrink step by step. The test also runs in
+    every `mvn test`, not only in Claude sessions.
+  - `FreezingArchRule`. It matches a violation by its text. With the count in the message,
+    any change to the count fails as a new violation, and only `freeze.refreeze=true` moves
+    the record, for every frozen rule at once. Without the count, a recorded class grows
+    unseen.
+  - The number in prose only. Nothing would enforce it.
+  - Rewriting memory files in plain sentences. The idea that agents copy the style of
+    `MEMORY.md` into code comments is unmeasured, and the index is one line per entry by
+    design. The explicit rule in `CLAUDE.md` is the direct lever.
+
+  **Pending:** a consolidation skill, run at milestones on the recorded classes, waits for the
+  owner's prompt text. PersonalFinance gets the test from a session in that repo.
+
 - **The Sonar gate's bypasses after 0.8b0's fifth review are closed** (2026-10-12, PersonalFinance
   step 0.8b0b). Each route was measured before it was guarded: read from the analyzers' own code
   in `~/.sonar/cache` (sonar-java 8.41, SonarJS 13.8), then planted beside a control on the
