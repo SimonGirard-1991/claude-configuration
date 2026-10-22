@@ -9,6 +9,7 @@
 !/CLAUDE.md
 !/settings.json
 !/agents/
+!/evals/
 !/hooks/
 !/rules/
 !/scripts/
@@ -16,6 +17,7 @@
 
 /skills/synced/
 /skills/.trash/
+/evals/results/
 
 .env*
 *.token

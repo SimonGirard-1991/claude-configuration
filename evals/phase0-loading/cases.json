@@ -1,0 +1,183 @@
+{
+  "addition": "phase0-loading",
+  "description": "How java.md and frontend.md reach a context: SessionStart injection vs native path-glob loading, per access mode and lifecycle step. Mechanics, not judgement: run with a small model.",
+  "fixtures": {
+    "java": {
+      "pom.xml": "<project>\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>demo</groupId>\n  <artifactId>demo</artifactId>\n  <version>1</version>\n</project>\n",
+      "README.md": "# Demo\n\nA greeter.\n",
+      "src/main/java/demo/Greeter.java": "package demo;\n\npublic final class Greeter {\n    public String greet(String name) {\n        return \"Hello \" + name;\n    }\n}\n"
+    },
+    "react": {
+      "package.json": "{\n  \"name\": \"demo-web\",\n  \"private\": true,\n  \"dependencies\": { \"next\": \"16.0.0\", \"react\": \"19.0.0\", \"react-dom\": \"19.0.0\" }\n}\n",
+      "app/page.tsx": "export default function Page() {\n  return <main>Hello</main>;\n}\n",
+      "lib/format.ts": "export function label(name: string): string {\n  return `Hello ${name}`;\n}\n"
+    },
+    "angular": {
+      "package.json": "{\n  \"name\": \"demo-ng\",\n  \"private\": true,\n  \"dependencies\": { \"@angular/core\": \"13.4.0\", \"rxjs\": \"6.6.0\" }\n}\n",
+      "angular.json": "{\n  \"version\": 1,\n  \"projects\": {}\n}\n",
+      "tailwind.config.js": "module.exports = { content: ['./src/**/*.html'] };\n",
+      "src/app/app.component.ts": "import { Component } from '@angular/core';\n\n@Component({ selector: 'app-root', templateUrl: './app.component.html' })\nexport class AppComponent {}\n",
+      "src/app/app.component.scss": ":host {\n  display: block;\n}\n",
+      "src/app/app.component.html": "<p>Hello</p>\n"
+    },
+    "mixed": {
+      "backend/pom.xml": "<project>\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>demo</groupId>\n  <artifactId>backend</artifactId>\n  <version>1</version>\n</project>\n",
+      "backend/src/main/java/demo/Greeter.java": "package demo;\n\npublic final class Greeter {\n    public String greet(String name) {\n        return \"Hello \" + name;\n    }\n}\n",
+      "web/package.json": "{\n  \"name\": \"demo-web\",\n  \"private\": true,\n  \"dependencies\": { \"next\": \"16.0.0\", \"react\": \"19.0.0\" }\n}\n",
+      "web/app/page.tsx": "export default function Page() {\n  return <main>Hello</main>;\n}\n",
+      "deploy/relay/requirements.txt": "requests==2.32.3\n"
+    },
+    "react-native": {
+      "package.json": "{\n  \"name\": \"demo-rn\",\n  \"private\": true,\n  \"dependencies\": { \"react\": \"19.0.0\", \"react-native\": \"0.80.0\" }\n}\n",
+      "App.tsx": "export default function App() {\n  return null;\n}\n",
+      "ios/App.xcodeproj/project.pbxproj": "// !$*UTF8*$!\n{\n}\n",
+      "ios/App/AppDelegate.swift": "import UIKit\n\nfinal class AppDelegate: UIResponder {}\n"
+    }
+  },
+  "cases": [
+    {
+      "id": "java-plan",
+      "description": "Timing: is the rule in context before any file access?",
+      "fixture": "java",
+      "steps": ["Without using any tool, reply with a one-line plan for adding a farewell method to the Greeter class."],
+      "expect": { "rules_loaded": ["java"] }
+    },
+    {
+      "id": "java-read",
+      "fixture": "java",
+      "steps": ["Use the Read tool to read src/main/java/demo/Greeter.java. Then reply DONE. Do nothing else."],
+      "expect": { "rules_loaded": ["java"] }
+    },
+    {
+      "id": "java-edit-unread",
+      "description": "Edit without a prior Read: does the attempt alone trigger a native load?",
+      "fixture": "java",
+      "steps": ["Without reading it first, use the Edit tool on src/main/java/demo/Greeter.java to replace \"Hello \" with \"Hi \". If the Edit tool refuses, do not retry and do not read the file; reply DONE."],
+      "expect": { "rules_loaded": ["java"] }
+    },
+    {
+      "id": "java-write-new",
+      "fixture": "java",
+      "steps": ["Use the Write tool to create src/main/java/demo/Farewell.java containing exactly this line: package demo; final class Farewell {}\nThen reply DONE. Do nothing else."],
+      "expect": { "rules_loaded": ["java"] }
+    },
+    {
+      "id": "java-bash-cat",
+      "fixture": "java",
+      "steps": ["Run exactly this command with the Bash tool and nothing else: cat src/main/java/demo/Greeter.java\nThen reply DONE."],
+      "expect": { "rules_loaded": ["java"] }
+    },
+    {
+      "id": "java-bash-head",
+      "fixture": "java",
+      "steps": ["Run exactly this command with the Bash tool and nothing else: head -n 3 src/main/java/demo/Greeter.java\nThen reply DONE."],
+      "expect": { "rules_loaded": ["java"] }
+    },
+    {
+      "id": "java-bash-sed",
+      "fixture": "java",
+      "steps": ["Run exactly this command with the Bash tool and nothing else: sed -n '1,3p' src/main/java/demo/Greeter.java\nThen reply DONE."],
+      "expect": { "rules_loaded": ["java"] }
+    },
+    {
+      "id": "java-bash-tail",
+      "fixture": "java",
+      "steps": ["Run exactly this command with the Bash tool and nothing else: tail -n 2 src/main/java/demo/Greeter.java\nThen reply DONE."],
+      "expect": { "rules_loaded": ["java"] }
+    },
+    {
+      "id": "java-bash-two-files",
+      "description": "Boundary: a Bash read of two files, the matching one second.",
+      "fixture": "java",
+      "steps": ["Run exactly this command with the Bash tool and nothing else: cat README.md src/main/java/demo/Greeter.java\nThen reply DONE."],
+      "expect": { "rules_loaded": ["java"] }
+    },
+    {
+      "id": "java-bash-grep",
+      "description": "Boundary: grep on one matching file.",
+      "fixture": "java",
+      "steps": ["Run exactly this command with the Bash tool and nothing else: grep -n greet src/main/java/demo/Greeter.java\nThen reply DONE."],
+      "expect": { "rules_loaded": ["java"] }
+    },
+    {
+      "id": "java-bash-pipe",
+      "description": "Boundary: a single-file read piped into another command.",
+      "fixture": "java",
+      "steps": ["Run exactly this command with the Bash tool and nothing else: cat src/main/java/demo/Greeter.java | head -n 2\nThen reply DONE."],
+      "expect": { "rules_loaded": ["java"] }
+    },
+    {
+      "id": "java-resume",
+      "description": "After --resume: does a copy survive, and is it injected again?",
+      "fixture": "java",
+      "steps": [
+        "Use the Read tool to read src/main/java/demo/Greeter.java. Then reply DONE. Do nothing else.",
+        "Reply DONE."
+      ],
+      "expect": { "rules_loaded": ["java"] }
+    },
+    {
+      "id": "java-compact",
+      "description": "After /compact: which copies survive, and does a later read load the rule again?",
+      "fixture": "java",
+      "steps": [
+        "Use the Read tool to read src/main/java/demo/Greeter.java. Then reply DONE. Do nothing else.",
+        "/compact",
+        "Use the Read tool to read src/main/java/demo/Greeter.java again. Then reply DONE. Do nothing else."
+      ],
+      "expect": { "rules_loaded": ["java"] }
+    },
+    {
+      "id": "java-subagent",
+      "description": "Does a reviewer subagent that reads a matching file get the rule, and only once?",
+      "fixture": "java",
+      "steps": ["Use the Agent tool with subagent_type code-reviewer. Ask it to read src/main/java/demo/Greeter.java and to answer in one sentence whether the class is final. Then reply DONE."],
+      "expect": { "rules_loaded": ["java"] }
+    },
+    {
+      "id": "react-read-tsx",
+      "fixture": "react",
+      "steps": ["Use the Read tool to read app/page.tsx. Then reply DONE. Do nothing else."],
+      "expect": { "rules_loaded": ["frontend"] }
+    },
+    {
+      "id": "react-read-ts",
+      "fixture": "react",
+      "steps": ["Use the Read tool to read lib/format.ts. Then reply DONE. Do nothing else."],
+      "expect": { "rules_loaded": ["frontend"] }
+    },
+    {
+      "id": "angular-read-ts",
+      "description": "Scoping: the React rule should not reach an Angular repo.",
+      "fixture": "angular",
+      "steps": ["Use the Read tool to read src/app/app.component.ts. Then reply DONE. Do nothing else."],
+      "expect": { "rules_not_loaded": ["frontend"] }
+    },
+    {
+      "id": "angular-read-scss",
+      "fixture": "angular",
+      "steps": ["Use the Read tool to read src/app/app.component.scss. Then reply DONE. Do nothing else."],
+      "expect": { "rules_not_loaded": ["frontend"] }
+    },
+    {
+      "id": "angular-read-tailwind",
+      "fixture": "angular",
+      "steps": ["Use the Read tool to read tailwind.config.js. Then reply DONE. Do nothing else."],
+      "expect": { "rules_not_loaded": ["frontend"] }
+    },
+    {
+      "id": "mixed-read-both",
+      "description": "A mixed repo: both rules injected, then both read natively.",
+      "fixture": "mixed",
+      "steps": ["Use the Read tool to read backend/src/main/java/demo/Greeter.java, then use it again to read web/app/page.tsx. Then reply DONE. Do nothing else."],
+      "expect": { "rules_loaded": ["java", "frontend"] }
+    },
+    {
+      "id": "react-native-read-tsx",
+      "description": "Scoping: detection excludes React Native; does the native fallback still load the React rule?",
+      "fixture": "react-native",
+      "steps": ["Use the Read tool to read App.tsx. Then reply DONE. Do nothing else."],
+      "expect": { "rules_not_loaded": ["frontend"] }
+    }
+  ]
+}

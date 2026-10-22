@@ -42,6 +42,78 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **A rule reaches each context once: SessionStart injects its body, and a native load brings
+  only a pointer stub** (2026-10-22, Phase 0 of the language-rules plan; Phase 1 builds it).
+  Claude Code now loads a path-scoped rule natively on more than a Read, and no load checks
+  whether the same text is already in context. `scripts/eval_config.py` measured this two
+  ways. The first was the live config on the fixture repos in `evals/phase0-loading/`: CLI
+  2.1.307, one run per case, with haiku at low effort, since loading is the harness's
+  behaviour and not the model's. The second was the recorded transcripts.
+  - **Only SessionStart puts a rule in context before planning.** A planning prompt with no
+    file access had the injected rule and no native load.
+  - **Every native load after an injection is a second copy.** In the fixture runs these
+    loaded it: a Read, an Edit with no Read before it, a Write of a new file, and `cat`,
+    `head`, `sed -n`, `tail` or `grep -n` on one file. A `cat` of two files and a piped `cat`
+    loaded nothing.
+  - **Before 2.1.307 the native loads were intermittent.** This was the first native load of
+    a session, attributed to the whole turn that triggered it, over the recorded sessions:
+    - A single-file Bash read loaded nothing on 2.1.289 or 2.1.292, and loaded consistently
+      from 2.1.295.
+    - A Write loaded the rule 5 times in 16.
+    - An Edit loaded it 0 times in 19.
+
+    The 2026-09-24 audit had seen only Read loads. Unreliable native loading is one more
+    reason the injection stays.
+  - **Resume keeps both copies.** The hook log records a `resume` injection, but it reaches
+    neither the transcript nor the request.
+  - **Compaction drops both copies.** SessionStart then injects the rule again, and the next
+    read loads it natively again.
+  - **Real sessions confirm it.** The sample is the 260 recorded sessions: Claude Code's
+    30-day retention window plus 2 older ones. Eval sessions and sessions in `~/.claude` are
+    left out.
+    - 129 of the 224 sessions that got `java.md` held it twice.
+    - 69 of the 208 that got `frontend.md` held it twice.
+  - **A second copy costs about 3.0k tokens for `java.md` and 3.4k for `frontend.md`.**
+    - In the fixture runs, a native load grew the next API call by 3,214 to 3,262 tokens for
+      `java.md` and by 3,626 for `frontend.md`.
+    - A read with no native load grew it by 180, which is the file content alone.
+    - In characters, the second copy is 8,615 for `java.md` and 9,272 for `frontend.md`.
+  - **Subagents get rules only natively.** 219 of 233 subagent rule loads were in
+    `code-reviewer`. The rest were in Explore and Plan.
+  - **The fallback leaks.** `frontend.md` loaded natively on an Angular `.ts`, `.scss` and
+    `tailwind.config.js`, and on a React Native `App.tsx`. Detection refuses both repos.
+
+  The owner chose the design on 2026-10-22, and Phase 1 builds it:
+  - Rule bodies move out of `rules/` into `conventions/`, and `session-rules.sh` injects
+    them from there.
+  - Each `rules/<lang>.md` becomes a stub of about 300 characters that keeps the `paths:`
+    fallback. The stub tells a context with no `[session-rules <lang> …]` block to read the
+    body.
+  - Each stub starts with `[rule-stub <lang>]`. The harness tells a stub from a body by that
+    marker. Without it, a stub would count as a second copy of the body, and Phase 1's
+    deduplication would look as if it had failed.
+  - Reviewer lenses read the body explicitly.
+  - Phase 1 also narrows each stub's globs.
+
+  **The harness.**
+  - A case file refuses a prompt that names a skill it tests, since that would test access
+    and not selection.
+  - Cost and tokens come from the session's cumulative totals. Per-step `usage` leaves out
+    subagents and compaction, and `total_cost_usd` already accumulates across `--resume`.
+  - Its first review found both of these after the numbers were first reported. The figures
+    above are the corrected ones.
+  - Its third review corrected the token cost, the CLI version and the version thresholds in
+    this entry.
+
+  **Rejected:**
+  - Keeping both mechanisms. More than half of the Java sessions carry about 3k duplicate
+    tokens, and each new language would add the same.
+  - Injection with no fallback. A repo the detector misses would get nothing: one nested
+    deeper than two levels, or a session started in a parent folder. Explore and Plan would
+    lose the rules too.
+  - Native loading only. A rule would arrive at the first file access, after planning.
+  - A body in `rules/` without `paths:`. A rule with no `paths:` loads in every session.
+
 - **A bean takes at most seven constructor dependencies, and the reviewer judges each touched
   class whole** (2026-10-21). PersonalFinance's application services had grown to 14 fields
   (SeedImporter), 13 (InvitationService) and 11 (InstrumentService). Each diff was simple, so
@@ -631,7 +703,9 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
   `hooks/session-rules.sh` now injects `java.md` or `frontend.md` when the repo is Java
   or React/Next, which is deterministic and costs nothing elsewhere. The `paths:`
-  frontmatter stays as a fallback.
+  frontmatter stays as a fallback. *Amended 2026-10-22:* on 2.1.307, an Edit, a Write or a
+  single-file Bash read also loads a path-scoped rule. Before that, those loads were
+  intermittent. Each one adds a second copy beside the injection. See that entry.
 
   Rejected alternatives:
   - The rules back in CLAUDE.md: every session pays for them.
