@@ -135,6 +135,13 @@
       "expect": { "rules_loaded": ["java"] }
     },
     {
+      "id": "java-subagent-review",
+      "description": "Does a reviewer asked for a review read the body, when only the stub reaches it natively?",
+      "fixture": "java",
+      "steps": ["Use the Agent tool with subagent_type code-reviewer. Ask it to review src/main/java/demo/Greeter.java as if the whole file were new, in at most three bullets. Then reply DONE."],
+      "expect": { "rules_loaded": ["java"] }
+    },
+    {
       "id": "react-read-tsx",
       "fixture": "react",
       "steps": ["Use the Read tool to read app/page.tsx. Then reply DONE. Do nothing else."],

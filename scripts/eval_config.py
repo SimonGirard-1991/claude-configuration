@@ -22,19 +22,28 @@ For the main session and for each subagent, a run records:
     SKILL.md read without invoking the skill, other files of a skill not invoked, and
     files read after the skill was invoked in the same context (progressive disclosure);
   - rule injections by hooks/session-rules.sh, over-cap pointers, native rule loads
-    (nested_memory), and native loads of a pointer stub (a rule file whose text starts with
-    "[rule-stub "); whether the rule was in context before the first file-touching tool
-    call; how many copies of the body the context holds after its last compaction, and the
+    (nested_memory), native loads of a pointer stub (a rule file whose text starts with
+    "[rule-stub "), and reads of a body in conventions/ through Read or Bash. A read whose
+    result is empty or Claude Code's "file unchanged" notice is not counted. Any read verb
+    counts, a partial one (grep, sed -n) included, and a Bash read's size is its whole
+    result, other files it printed included;
+  - whether a body (injected, native or read) was in context before the first file-touching
+    tool call, where a call that reads a body does not count as one; how many copies
+    of the body and how many stubs the context holds after its last compaction, and the
     characters beyond the largest copy. Pointers and stubs are not copies of the body;
   - the trigger file of each native load, from logs/rules.jsonl;
   - cost and tokens from the session's cumulative totals (total_cost_usd, modelUsage),
     which cover subagents and compaction, and the last non-empty answer.
 
 Entries are read in file order. A session rewound in the UI keeps its abandoned branch in
-the file, so its counts are an approximation. A Bash call counts as a read of a skill file
-when a read verb (cat, head, sed without -i, grep, ...) takes it as an operand, with cd and
-simple variable assignments earlier in the same call followed; a redirect target is a
-write, not a read. A command shlex cannot parse falls back to splitting on separators.
+the file, so its counts are an approximation. A Bash call reads a file when a read verb
+(cat, head, sed without -i, grep, ...) takes it as an operand or as its < input. Earlier in
+the same call, cd, assignments (export included) and for-loop variables are followed, and
+a path is normalised. A > target is a write, not a read. A command shlex cannot parse is
+split on separators and whitespace, then read by the same rules.
+
+A case may carry a rubric (must_find, must_not_flag). The harness stores it in each run
+record for the grader and does not grade.
 
 Expectations are measurements, not assertions: a summary lists unmet ones under "unmet",
 judged over the runs that have an analysis, and the exit status stays 0.
@@ -87,13 +96,18 @@ OVER_CAP_MARK = "it is not inlined here"
 STUB_MARK = "[rule-stub "
 BASH_SEPARATORS = frozenset({"&&", "||", "|", ";", "\n", "&", "(", ")", ";;", "|&"})
 BASH_REDIRECTS = frozenset({">", ">>", "<", "<<", "<<<", ">&", "&>", "&>>", "<>", ">|"})
+BASH_PREFIXES = frozenset({"export", "do", "then", "else", "if", "elif", "while", "until", "!",
+                           "{"})
 ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 VARIABLE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
+FALLBACK_SEGMENTS = re.compile(r"\|\||&&|[|;\n]")
+FALLBACK_WORDS = re.compile(r"&?[<>]+&?|[^\s<>]+")
 PARENT_SESSION_VARS = frozenset({"CLAUDECODE", "CLAUDE_CODE_SESSION_ID",
                                  "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ATTENDED",
                                  "CLAUDE_PID", "CLAUDE_EFFORT", "AI_AGENT"})
 PARENT_SESSION_PREFIXES = ("CLAUDE_CODE_MESSAGING_",)
 EXPECT_KEYS = frozenset({"rules_loaded", "rules_not_loaded", "skills_load", "skills_not_load"})
+RUBRIC_KEYS = frozenset({"must_find", "must_not_flag"})
 SLUG = re.compile(r"[a-z0-9][a-z0-9-]*")
 DEFAULT_TIMEOUT_S = 600
 DEFAULT_REPEATS = 3
@@ -105,13 +119,19 @@ class CaseError(Exception):
     pass
 
 
-def skill_path_pattern() -> re.Pattern[str]:
-    prefixes = [re.escape(str(CONFIG_DIR / "skills"))]
+def config_path_pattern(subdir: str, tail: str) -> re.Pattern[str]:
+    prefixes = [re.escape(str(CONFIG_DIR / subdir))]
     if CONFIG_DIR == HOME / ".claude":
-        prefixes += [re.escape("~/.claude/skills"), re.escape("$HOME/.claude/skills"),
-                     re.escape("${HOME}/.claude/skills")]
-    return re.compile("(?:" + "|".join(prefixes)
-                      + r")/(?:synced/[^/\s'\"]+/)?([A-Za-z0-9_.-]+)/([^\s'\";|&]*)")
+        prefixes += [re.escape(f"{home}/.claude/{subdir}") for home in ("~", "$HOME", "${HOME}")]
+    return re.compile("(?:" + "|".join(prefixes) + ")" + tail)
+
+
+def skill_path_pattern() -> re.Pattern[str]:
+    return config_path_pattern("skills", r"/(?:synced/[^/\s'\"]+/)?([A-Za-z0-9_.-]+)/([^\s'\";|&]*)")
+
+
+def body_path_pattern() -> re.Pattern[str]:
+    return config_path_pattern("conventions", r"/([a-z]+)\.md")
 
 
 def read_jsonl(path: Path) -> list[Json]:
@@ -155,12 +175,37 @@ def rule_loads(entry: Json) -> list[tuple[str, str, int]]:
     return []
 
 
-def tool_uses(entry: Json) -> list[Json]:
-    if entry.get("type") != "assistant":
+def content_blocks(entry: Json, role: str, kind: str) -> list[Json]:
+    if entry.get("type") != role:
         return []
     content = (entry.get("message") or {}).get("content") or []
-    return [block for block in content
-            if isinstance(block, dict) and block.get("type") == "tool_use"]
+    if not isinstance(content, list):
+        return []
+    return [block for block in content if isinstance(block, dict) and block.get("type") == kind]
+
+
+def tool_uses(entry: Json) -> list[Json]:
+    return content_blocks(entry, "assistant", "tool_use")
+
+
+def result_text(block: Json) -> str:
+    content = block.get("content")
+    if isinstance(content, list):
+        return "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
+    return content if isinstance(content, str) else ""
+
+
+def body_reads(entry: Json, pending: dict[str, list[str]]) -> list[tuple[str, str, int]]:
+    outcome = entry.get("toolUseResult")
+    if isinstance(outcome, dict) and outcome.get("type") == "file_unchanged":
+        return []
+    loads = []
+    for block in content_blocks(entry, "user", "tool_result"):
+        rules = pending.pop(str(block.get("tool_use_id")), [])
+        text = result_text(block)
+        if rules and text and not block.get("is_error"):
+            loads += [(rule, "read", len(text) // len(rules)) for rule in rules]
+    return loads
 
 
 def bash_words(command: str) -> list[list[str]]:
@@ -168,11 +213,15 @@ def bash_words(command: str) -> list[list[str]]:
     lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
     commands: list[list[str]] = [[]]
-    for token in lexer:
-        if token in BASH_SEPARATORS:
-            commands.append([])
-        else:
-            commands[-1].append(token)
+    try:
+        for token in lexer:
+            if token in BASH_SEPARATORS:
+                commands.append([])
+            else:
+                commands[-1].append(token)
+    except ValueError:
+        commands = [[word.strip("'\"") for word in FALLBACK_WORDS.findall(segment)]
+                    for segment in FALLBACK_SEGMENTS.split(command)]
     return [words for words in commands if words]
 
 
@@ -180,41 +229,58 @@ def anchored(path: str) -> bool:
     return path.startswith(("/", "~", "$HOME", "${HOME}"))
 
 
+def resolve(cwd: str | None, word: str) -> str:
+    path = word if anchored(word) or cwd is None else f"{cwd.rstrip('/')}/{word}"
+    normal = os.path.normpath(path)
+    return normal + "/" if path.endswith("/") and not normal.endswith("/") else normal
+
+
+def expand(word: str, variables: dict[str, list[str]], start: int = 0) -> list[str]:
+    match = VARIABLE.search(word, start)
+    if match is None:
+        return [word]
+    values = variables.get(match.group(1))
+    if values is None:
+        return expand(word, variables, match.end())
+    return [result for value in values
+            for result in expand(word[:match.start()] + value + word[match.end():], variables,
+                                 match.start() + len(value))]
+
+
 def bash_read_operands(command: str) -> list[str]:
-    try:
-        commands = bash_words(command)
-    except ValueError:
-        return [segment for segment in re.split(r"\|\||&&|[|;\n]", command)
-                if segment.split() and Path(segment.split()[0]).name in READ_COMMANDS]
     cwd: str | None = None
-    variables: dict[str, str] = {}
+    variables: dict[str, list[str]] = {}
     operands: list[str] = []
-    for words in commands:
-        while words and ASSIGNMENT.match(words[0]):
-            name, value = words[0].split("=", 1)
-            variables[name] = value
+    for words in bash_words(command):
+        while words and (words[0] in BASH_PREFIXES or ASSIGNMENT.match(words[0])):
+            if ASSIGNMENT.match(words[0]):
+                name, value = words[0].split("=", 1)
+                variables[name] = expand(value, variables)
             words = words[1:]
         if not words:
             continue
-        words = [VARIABLE.sub(lambda m: variables.get(m.group(1), m.group(0)), word)
-                 for word in words]
+        if words[0] == "for" and len(words) > 2 and words[2] == "in":
+            variables[words[1]] = [value for word in words[3:]
+                                   for value in expand(word, variables)]
+            continue
+        words = [value for word in words for value in expand(word, variables)]
         verb = Path(words[0]).name
         if verb == "cd" and len(words) > 1:
-            target = words[1]
-            cwd = target if anchored(target) or cwd is None else f"{cwd.rstrip('/')}/{target}"
+            cwd = resolve(cwd, words[1])
             continue
         if verb not in READ_COMMANDS or (verb == "sed" and any(
                 word.startswith(("-i", "--in-place")) for word in words[1:])):
             continue
-        skip = False
+        redirect = None
         for word in words[1:]:
-            if skip:
-                skip = False
+            if redirect is not None:
+                if redirect == "<":
+                    operands.append(resolve(cwd, word))
+                redirect = None
             elif word in BASH_REDIRECTS:
-                skip = True
+                redirect = word
             elif not word.startswith("-"):
-                operands.append(word if anchored(word) or cwd is None
-                                else f"{cwd.rstrip('/')}/{word}")
+                operands.append(resolve(cwd, word))
     return operands
 
 
@@ -230,9 +296,11 @@ def read_targets(name: str, tool_input: Json) -> list[str]:
 
 def analyze_context(entries: list[Json]) -> Json:
     skill_re = skill_path_pattern()
+    body_re = body_path_pattern()
     first_file_tool = None
     loads: list[tuple[int, str, str, int, str | None]] = []
     boundaries: list[tuple[int, set[str]]] = []
+    pending_reads: dict[str, list[str]] = {}
     invoked: Counter[str] = Counter()
     md_without_invoke: Counter[str] = Counter()
     other_without_invoke: Counter[str] = Counter()
@@ -242,19 +310,23 @@ def analyze_context(entries: list[Json]) -> Json:
         if entry.get("type") == "system" and entry.get("subtype") == "compact_boundary":
             preserved = ((entry.get("compactMetadata") or {}).get("preservedMessages") or {})
             boundaries.append((index, set(preserved.get("allUuids") or [])))
-        for rule, mechanism, chars in rule_loads(entry):
+        for rule, mechanism, chars in rule_loads(entry) + body_reads(entry, pending_reads):
             loads.append((index, rule, mechanism, chars, entry.get("uuid")))
         for block in tool_uses(entry):
             name = str(block.get("name"))
             tools.append(name)
-            if first_file_tool is None and name in FILE_TOOLS:
-                first_file_tool = index
             tool_input = block.get("input") or {}
+            targets = read_targets(name, tool_input)
+            bodies = [match.group(1) for match in map(body_re.fullmatch, targets) if match]
+            if bodies:
+                pending_reads[str(block.get("id"))] = sorted(set(bodies))
+            if first_file_tool is None and name in FILE_TOOLS and not bodies:
+                first_file_tool = index
             if name == "Skill":
                 invoked[str(tool_input.get("skill"))] += 1
                 continue
             touched: dict[str, bool] = {}
-            for target in read_targets(name, tool_input):
+            for target in targets:
                 for skill, rest in skill_re.findall(target):
                     touched[skill] = touched.get(skill, False) or rest == "SKILL.md"
             for skill, is_skill_md in touched.items():
@@ -268,15 +340,19 @@ def analyze_context(entries: list[Json]) -> Json:
     rules: dict[str, Json] = {}
     for index, rule, mechanism, chars, entry_uuid in loads:
         stats = rules.setdefault(rule, {"injected": 0, "pointer": 0, "native": 0, "stub": 0,
-                                        "copies_in_context": 0, "chars_in_context": 0,
+                                        "read": 0, "copies_in_context": 0,
+                                        "stubs_in_context": 0, "chars_in_context": 0,
                                         "largest_copy": 0, "before_first_file_tool": False})
         stats[mechanism] += 1
-        is_body = mechanism in ("injected", "native")
-        if is_body and (index > last_boundary or entry_uuid in preserved):
+        is_body = mechanism in ("injected", "native", "read")
+        in_context = index > last_boundary or entry_uuid in preserved
+        if is_body and in_context:
             stats["copies_in_context"] += 1
             stats["chars_in_context"] += chars
             stats["largest_copy"] = max(stats["largest_copy"], chars)
-        if first_file_tool is None or index < first_file_tool:
+        if mechanism == "stub" and in_context:
+            stats["stubs_in_context"] += 1
+        if is_body and (first_file_tool is None or index < first_file_tool):
             stats["before_first_file_tool"] = True
     for stats in rules.values():
         stats["excess_chars"] = stats["chars_in_context"] - stats.pop("largest_copy")
@@ -406,6 +482,13 @@ def check_case(case: object, fixtures: Json, seen: set[str]) -> None:
         if any(names_skill(step, skill) for step in steps):
             raise CaseError(f"case {case_id}: a prompt names skill {skill!r}; a named skill "
                             "tests access and content, not selection")
+    rubric = case.get("rubric", {})
+    if not isinstance(rubric, dict) or set(rubric) - RUBRIC_KEYS or not all(
+            isinstance(items, list) and items and all(
+                isinstance(item, str) and item.strip() for item in items)
+            for items in rubric.values()):
+        raise CaseError(f"case {case_id}: 'rubric' takes only {', '.join(sorted(RUBRIC_KEYS))}, "
+                        "each a non-empty list of descriptions")
 
 
 def load_cases(path: Path) -> Json:
@@ -502,9 +585,9 @@ def run_record(case: Json, repeat: int, session_id: str, steps: list[Json],
     failed = (error is not None or len(steps) < len(case["steps"])
               or any(step["exit"] != 0 or step["is_error"] for step in steps))
     return {"case": case["id"], "repeat": repeat, "session_id": session_id,
-            "fixture": case["fixture"], "expect": case.get("expect", {}), "failed": failed,
-            "error": error, "steps": steps, "analysis": analysis,
-            "analysis_source": analysis_source}
+            "fixture": case["fixture"], "expect": case.get("expect", {}),
+            "rubric": case.get("rubric", {}), "failed": failed, "error": error, "steps": steps,
+            "analysis": analysis, "analysis_source": analysis_source}
 
 
 def run_once(spec: Json, case: Json, repeat: int, args: argparse.Namespace, work: Path,
@@ -537,7 +620,7 @@ def rule_view(context: Json, rule: str) -> Json:
 
 def loaded(context: Json, rule: str) -> bool:
     stats = rule_view(context, rule)
-    return bool(stats.get("injected", 0) + stats.get("native", 0))
+    return bool(stats.get("injected", 0) + stats.get("native", 0) + stats.get("read", 0))
 
 
 def skill_touched(context: Json, skill: str) -> bool:
@@ -574,10 +657,13 @@ def summarize(case: Json, runs: list[Json]) -> Json:
                 row["runs pointer"] += any(rule_view(c, rule).get("pointer") for c in group)
                 row["runs stub"] += any(rule_view(c, rule).get("stub") for c in group)
                 row["runs native"] += any(rule_view(c, rule).get("native") for c in group)
+                row["runs read"] += any(rule_view(c, rule).get("read") for c in group)
                 row["runs before first file tool"] += any(
                     rule_view(c, rule).get("before_first_file_tool") for c in group)
                 row["runs with 2+ copies"] += any(
                     rule_view(c, rule).get("copies_in_context", 0) > 1 for c in group)
+                row["runs with 2+ stubs"] += any(
+                    rule_view(c, rule).get("stubs_in_context", 0) > 1 for c in group)
                 row["max excess chars"] = max(row["max excess chars"], *(
                     rule_view(c, rule).get("excess_chars", 0) for c in group))
     summary["contexts"] = {label: {"runs present": view["runs present"],
@@ -696,7 +782,8 @@ def command_report(args: argparse.Namespace) -> int:
             old = json.loads(path.read_text(encoding="utf-8"))
             case = known.get(old["case"]) or {"id": old["case"], "fixture": old["fixture"],
                                               "steps": [s["prompt"] for s in old["steps"]],
-                                              "expect": old.get("expect", {})}
+                                              "expect": old.get("expect", {}),
+                                              "rubric": old.get("rubric", {})}
             steps = []
             for index, step in enumerate(old["steps"]):
                 stream = path.parent / f"step-{index}.jsonl"
@@ -758,12 +845,14 @@ def command_scan(args: argparse.Namespace) -> int:
             row = totals["rules"].setdefault(rule, Counter())
             row["sessions injected"] += stats["injected"] > 0
             row["sessions native in main"] += stats["native"] > 0
+            row["sessions read in main"] += stats["read"] > 0
             row["sessions with 2+ copies"] += stats["copies_in_context"] > 1
             row["excess chars"] += stats["excess_chars"]
         for agent in report["subagents"]:
             for rule, stats in agent["rules"].items():
-                totals["rules"].setdefault(rule, Counter())[
-                    f"native loads in subagent:{agent['type'] or 'unknown'}"] += stats["native"]
+                row = totals["rules"].setdefault(rule, Counter())
+                row[f"native loads in subagent:{agent['type'] or 'unknown'}"] += stats["native"]
+                row[f"reads in subagent:{agent['type'] or 'unknown'}"] += stats["read"]
         contexts = [report["main"], *report["subagents"]]
         for metric in ("skills_invoked", "skill_md_read_without_invoke",
                        "skill_files_read_without_invoke", "skill_files_read_after_invoke"):

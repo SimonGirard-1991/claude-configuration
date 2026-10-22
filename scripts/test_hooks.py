@@ -290,20 +290,27 @@ def test_reviewer_guard() -> None:
 # The fixture root is resolved first: macOS temp dirs live under /var, a symlink to
 # /private/var, and the hook compares physical paths. HOME, the config dir and the log
 # all point inside it, so the real ~/.claude/logs is never written.
-def strip_frontmatter(text: str) -> str:
-    lines = text.splitlines()
-    if lines and lines[0] == "---":
-        end = lines.index("---", 1)
-        lines = lines[end + 1:]
-    return "\n".join(lines)
+def copy_rules(config: Path) -> None:
+    for sub in ("rules", "conventions"):
+        (config / sub).mkdir(parents=True)
+        for path in (ROOT / sub).glob("*.md"):
+            shutil.copy(path, config / sub / path.name)
+
+
+XCODEGEN_SPEC = """name: App
+targets:
+  App:
+    type: application
+    platform: iOS
+    sources: [App]
+"""
 
 
 def test_session_rules() -> None:
     fx = Path(tempfile.mkdtemp()).resolve()
     config, home, log = fx / "config", fx / "home", fx / "log" / "rules.jsonl"
-    (config / "rules").mkdir(parents=True)
-    for rule in ("java.md", "frontend.md", "shell.md"):
-        shutil.copy(ROOT / "rules" / rule, config / "rules" / rule)
+    copy_rules(config)
+    (config / "conventions" / "swift.md").write_text("# Swift conventions\n\nA fixture body.\n")
     env = {**os.environ, "CLAUDE_CONFIG_DIR": str(config), "HOME": str(home),
            "CLAUDE_RULES_LOG": str(log)}
 
@@ -327,6 +334,33 @@ def test_session_rules() -> None:
     put("mobile/package.json", pkg({"react": "19", "react-native": "0.76"}))
     put("nm/package.json", pkg(dev={"eslint": "9"}))
     put("nm/node_modules/x/package.json", pkg({"react": "19"}))
+    put("spm/Package.swift")
+    put("xcproj/App.xcodeproj/project.pbxproj")
+    put("ws/sub/App.xcworkspace/contents.xcworkspacedata")
+    put("xcodegen/project.yml", XCODEGEN_SPEC)
+    put("xcodegen-nested/ios/project.yml", XCODEGEN_SPEC)
+    put("deep2/Packages/Core/Package.swift")
+    put("deep3/a/b/c/Package.swift")
+    put("otheryml/project.yml", "name: docs\ntargets:\n  production:\n    type: static\n"
+                                "    platform: linux\n")
+    put("nested-keys/project.yml", "targets:\n  App:\n    settings:\n      type: application\n"
+                                   "      platform: iOS\n")
+    put("destinations/project.yml", "targets:\n  App:\n    type: application\n"
+                                    "    supportedDestinations: [iOS, tvOS]\n")
+    put("platform-list/project.yml", "targets:\n  App:\n    type: framework\n"
+                                     "    platform: [iOS, tvOS]\n")
+    put("platform-quoted/project.yml", 'targets:\n  App:\n    type: application\n'
+                                       '    platform: "tvOS"\n')
+    put("targets-comment/project.yml", "targets: # one per platform\n  App:\n"
+                                       "    type: application\n    platform: macOS\n")
+    put("type-mapping/project.yml", "targets:\n  App:\n    type:\n      kind: application\n"
+                                    "    platform: iOS\n")
+    put("fakeproj/Notes.xcodeproj", "a file, not a project directory\n")
+    put("rn/package.json", pkg({"react": "19", "react-native": "0.80"}))
+    put("rn/ios/App.xcodeproj/project.pbxproj")
+    subprocess.run(["git", "init", "-q", str(home / "rn")], check=True)
+    put("nmswift/node_modules/pkg/Package.swift")
+    put("pods/Pods/Pods.xcodeproj/project.pbxproj")
 
     def session(rule: str, cwd: Path, run_env: dict = env):
         proc = run_hook([SESSION_RULES, rule],
@@ -350,6 +384,30 @@ def test_session_rules() -> None:
         ("frontend", home / "mobile", False),
         ("frontend", home / "nm", False),
         ("frontend", home / "javarepo", False),
+        ("swift", home / "spm", True),
+        ("swift", home / "xcproj", True),
+        ("swift", home / "ws", True),
+        ("swift", home / "xcodegen", True),
+        ("swift", home / "xcodegen-nested", True),
+        ("swift", home / "deep2", True),
+        ("swift", home / "deep3", False),
+        ("swift", home / "otheryml", False),
+        ("swift", home / "nested-keys", False),
+        ("swift", home / "destinations", True),
+        ("swift", home / "platform-list", True),
+        ("swift", home / "platform-quoted", True),
+        ("swift", home / "targets-comment", True),
+        ("swift", home / "type-mapping", False),
+        ("swift", home / "fakeproj", False),
+        ("swift", home / "rn", False),
+        ("swift", home / "rn" / "ios", False),
+        ("swift", home / "nmswift", False),
+        ("swift", home / "pods", False),
+        ("swift", home / "javarepo", False),
+        ("swift", home, False),
+        ("swift", Path("/"), False),
+        ("java", home / "spm", False),
+        ("frontend", home / "rn", False),
     ]
     injected = 0
     for rule, cwd, expect in cases:
@@ -381,8 +439,8 @@ def test_session_rules() -> None:
           and "hookSpecificOutput" not in out, repr(out))
 
     big = fx / "big-config"
-    (big / "rules").mkdir(parents=True)
-    (big / "rules" / "java.md").write_text("# Java\n\n" + "x" * 12000 + "\n")
+    (big / "conventions").mkdir(parents=True)
+    (big / "conventions" / "java.md").write_text("# Java\n\n" + "x" * 12000 + "\n")
     code, out = session("java", home / "javarepo", {**env, "CLAUDE_CONFIG_DIR": str(big)})
     ctx = ((out or {}).get("hookSpecificOutput") or {}).get("additionalContext", "")
     check("session-rules: an oversized rule degrades to a pointer, loudly",
@@ -395,12 +453,23 @@ def test_session_rules() -> None:
           code == 0 and bool(ctx) and "cannot write" in (out or {}).get("systemMessage", ""),
           repr(out)[:160])
 
-    proc = run_hook([SESSION_RULES, "python"], {"cwd": str(home / "web")}, env=env)
+    proc = run_hook([SESSION_RULES, "cobol"], {"cwd": str(home / "web")}, env=env)
     check("session-rules: an unknown rule name exits 1", proc.returncode == 1, str(proc.returncode))
 
-    for rule in ("java", "frontend"):
-        body = strip_frontmatter((ROOT / "rules" / f"{rule}.md").read_text())
-        check(f"session-rules: live rules/{rule}.md fits under the cap with its header",
+    bodies = sorted((ROOT / "conventions").glob("*.md"))
+    check("session-rules: the live bodies are found", len(bodies) >= 2, str(bodies))
+    settings = json.loads((ROOT / "settings.json").read_text())
+    wired = [hook.get("command", "").split()[-2:] for entry in settings["hooks"]["SessionStart"]
+             for hook in entry.get("hooks", [])]
+    for path in bodies:
+        check(f"session-rules: settings.json runs the hook for conventions/{path.name}",
+              any(len(words) == 2 and words[0].endswith("hooks/session-rules.sh")
+                  and words[1] == path.stem for words in wired), repr(wired))
+    for path in bodies:
+        body = path.read_text()
+        check(f"session-rules: live conventions/{path.name} has no frontmatter",
+              not body.startswith("---"), body[:40])
+        check(f"session-rules: live conventions/{path.name} fits under the cap with its header",
               len(body) + 200 <= HOOK_OUTPUT_CAP, f"{len(body)} chars of body")
 
     before = len(log.read_text().splitlines()) if log.exists() else 0
@@ -1914,16 +1983,15 @@ def test_validate_readme() -> None:
 
 
 # ── validate-rules.sh ───────────────────────────────────────────────────────
-# The inflated rule runs first as the positive control: a validator that never reached its
+# The inflated body runs first as the positive control: a validator that never reached its
 # oracle would pass every green case after it. The oracle is SESSION_RULES, so a candidate
 # session-rules.sh is exercised here too.
 def test_validate_rules() -> None:
     fx = Path(tempfile.mkdtemp()).resolve()
     config = fx / "config"
-    (config / "rules").mkdir(parents=True)
-    for rule in ("java.md", "frontend.md"):
-        shutil.copy(ROOT / "rules" / rule, config / "rules" / rule)
-    frontend, java = config / "rules" / "frontend.md", config / "rules" / "java.md"
+    copy_rules(config)
+    frontend, java = config / "conventions" / "frontend.md", config / "conventions" / "java.md"
+    java_stub = config / "rules" / "java.md"
     scratch = fx / "tmp"
     scratch.mkdir()
     env = {**os.environ, "CLAUDE_CONFIG_DIR": str(config), "CLAUDE_SESSION_RULES": SESSION_RULES,
@@ -1943,36 +2011,88 @@ def test_validate_rules() -> None:
                               env=run_env, cwd=config, timeout=30, check=False)
 
     def detail(proc: subprocess.CompletedProcess) -> str:
-        return f"exit {proc.returncode}, stderr {proc.stderr.strip()[:160]!r}"
+        return f"exit {proc.returncode}, stderr {proc.stderr.strip()[:200]!r}"
 
-    live, java_live = frontend.read_text(), java.read_text()
+    live, java_live, stub_live = frontend.read_text(), java.read_text(), java_stub.read_text()
     loop_heading = "\n### Self-review loop\n"
     frontend.write_text(live.replace(loop_heading, "\n" + "x" * 12000 + "\n" + loop_heading))
     proc = validate(str(frontend))
-    check("validate-rules: positive control, an inflated rule blocks and is named",
-          proc.returncode == 2 and "rules/frontend.md is too big" in proc.stderr, detail(proc))
-    proc = validate("rules/frontend.md")
+    check("validate-rules: positive control, an inflated body blocks and is named",
+          proc.returncode == 2 and "conventions/frontend.md is too big" in proc.stderr,
+          detail(proc))
+    proc = validate("conventions/frontend.md")
     check("validate-rules: a relative path is checked", proc.returncode == 2, detail(proc))
+    proc = validate(str(config / "rules" / "frontend.md"))
+    check("validate-rules: a changed stub re-checks its body", proc.returncode == 2,
+          detail(proc))
     proc = validate(str(frontend), run_env={**env, "CLAUDE_SESSION_RULES": str(reworded)})
     check("validate-rules: an overflow blocks whatever the oracle's notice says",
-          proc.returncode == 2 and "rules/frontend.md" in proc.stderr, detail(proc))
+          proc.returncode == 2 and "conventions/frontend.md" in proc.stderr, detail(proc))
     frontend.write_text(live)
     proc = validate(str(config / "hooks" / "session-rules.sh"),
                     run_env={**env, "CLAUDE_SESSION_RULES": str(silent)})
-    check("validate-rules: a change to the oracle re-checks the rules",
-          proc.returncode == 1 and "java" in proc.stderr and "frontend" in proc.stderr,
+    check("validate-rules: a change to the oracle re-checks every body",
+          proc.returncode == 1 and all(f"session-rules.sh {path.stem} gave no injection"
+                                       in proc.stderr
+                                       for path in (config / "conventions").glob("*.md")),
           detail(proc))
 
-    proc = validate(str(frontend), str(java))
-    check("validate-rules: the live rules pass", proc.returncode == 0 and not proc.stderr,
+    everything = [str(path) for sub in ("rules", "conventions")
+                  for path in (config / sub).glob("*.md")]
+    proc = validate(*everything)
+    check("validate-rules: the live bodies and stubs pass", proc.returncode == 0 and not proc.stderr,
           detail(proc))
+
+    stub_rows = [
+        ("a stub without paths: blocks", stub_live.replace("paths:", "globs:"), "no paths:"),
+        ("a stub without its marker blocks", stub_live.replace("[rule-stub java] ", ""),
+         "does not start with [rule-stub java]"),
+        ("a stub marked for another rule blocks",
+         stub_live.replace("[rule-stub java]", "[rule-stub kotlin]"),
+         "does not start with [rule-stub java]"),
+        ("a stub that does not name its body blocks",
+         stub_live.replace("~/.claude/conventions/java.md", "the Java body"), "does not name"),
+        ("a stub over the cap blocks", stub_live + "y" * 600, "a stub stays under"),
+    ]
+    for name, text, message in stub_rows:
+        check(f"validate-rules: the mutant for '{name}' differs from the live stub",
+              text != stub_live, name)
+        java_stub.write_text(text)
+        proc = validate(str(java_stub))
+        check(f"validate-rules: {name}", proc.returncode == 2 and message in proc.stderr,
+              detail(proc))
+    java_stub.unlink()
+    proc = validate(str(java_stub))
+    check("validate-rules: a deleted stub blocks while its body remains",
+          proc.returncode == 2 and "rules/java.md is missing" in proc.stderr, detail(proc))
+    java_stub.write_text(stub_live)
+    java.unlink()
+    proc = validate(str(java))
+    check("validate-rules: a deleted body blocks while its stub remains",
+          proc.returncode == 2 and "which does not exist" in proc.stderr, detail(proc))
+    java_stub.unlink()
+    proc = validate(str(java), str(java_stub))
+    check("validate-rules: a body retired with its stub passes", proc.returncode == 0,
+          detail(proc))
+    java.write_text(java_live)
+    java_stub.write_text(stub_live)
+
+    kotlin, kotlin_stub = config / "conventions" / "kotlin.md", config / "rules" / "kotlin.md"
+    kotlin.write_text("# Kotlin conventions\n" + live[live.index(loop_heading):])
+    kotlin_stub.write_text(stub_live.replace("java", "kotlin"))
+    proc = validate(str(kotlin))
+    check("validate-rules: a body without a fixture row blocks",
+          proc.returncode == 2 and "conventions/kotlin.md has no fixture row" in proc.stderr,
+          detail(proc))
+    kotlin.unlink()
+    kotlin_stub.unlink()
 
     drifted = live.replace("adding nothing new.", "adding nothing.")
     check("validate-rules: the drifted loop really differs from the live one", drifted != live,
           "'adding nothing new.' is gone from the loop; update the mutant")
     frontend.write_text(drifted)
-    proc = validate(str(frontend))
-    check("validate-rules: a loop edited in one rule only blocks, naming the difference",
+    proc = validate(str(java))
+    check("validate-rules: a loop edited in one body blocks, naming the difference",
           proc.returncode == 2 and "differ" in proc.stderr and "adding nothing" in proc.stderr,
           detail(proc))
     proc = validate(str(frontend), run_env={**env, "CLAUDE_SESSION_RULES": str(fx / "missing.sh")})
@@ -1981,17 +2101,18 @@ def test_validate_rules() -> None:
     proc = validate(str(frontend), run_env={**env, "TMPDIR": str(fx / "no-such-dir")})
     check("validate-rules: loop drift still blocks when no fixture directory can be made",
           proc.returncode == 2 and "OFF" in proc.stderr and "differ" in proc.stderr, detail(proc))
-    frontend.write_text(live.replace(loop_heading, "\n### Review loop\n"))
-    java.write_text(java_live.replace(loop_heading, "\n### Review loop\n"))
+    for body in (config / "conventions").glob("*.md"):
+        body.write_text(body.read_text().replace(loop_heading, "\n### Review loop\n"))
     proc = validate(str(frontend))
-    check("validate-rules: a loop missing from both rules blocks rather than passing as equal",
-          proc.returncode == 2 and "rules/java.md has no" in proc.stderr
-          and "rules/frontend.md has no" in proc.stderr, detail(proc))
-    frontend.write_text(live)
-    java.write_text(java_live)
+    check("validate-rules: a loop missing from every body blocks rather than passing as equal",
+          proc.returncode == 2 and all(f"conventions/{path.name} has no" in proc.stderr
+                                       for path in (config / "conventions").glob("*.md")),
+          detail(proc))
+    for path in (ROOT / "conventions").glob("*.md"):
+        shutil.copy(path, config / "conventions" / path.name)
     proc = validate(str(config / "README.md"), "/etc/hosts", str(config / "rules" / "shell.md"),
                     run_env={**env, "CLAUDE_SESSION_RULES": str(fx / "missing.sh")})
-    check("validate-rules: other paths pass without running the oracle",
+    check("validate-rules: other paths, shell.md included, pass without running the oracle",
           proc.returncode == 0 and not proc.stderr, detail(proc))
     proc = validate(str(frontend), run_env={**env, "CLAUDE_SESSION_RULES": str(fx / "missing.sh")})
     check("validate-rules: a missing oracle turns the check OFF, loudly",
@@ -1999,9 +2120,6 @@ def test_validate_rules() -> None:
     proc = validate(str(frontend), run_env={**env, "CLAUDE_SESSION_RULES": str(silent)})
     check("validate-rules: an oracle that injects nothing is reported, not passed",
           proc.returncode == 1 and "no injection" in proc.stderr, detail(proc))
-    java.unlink()
-    proc = validate(str(java))
-    check("validate-rules: a deleted rule is not an overflow", proc.returncode == 0, detail(proc))
     check("validate-rules: its fixture directories are removed", not any(scratch.iterdir()),
           str(list(scratch.iterdir())))
     shutil.rmtree(fx)

@@ -2,9 +2,10 @@
 # Stop: refuse to let a turn finish with new Sonar findings.
 #
 # It hung off SubagentStop matching java-backend-architect until that agent was retired into
-# rules/java.md; the gate belongs on the session itself now, which is where the Java work
-# actually happens. Nothing in the body changed: the trigger already read `.cwd` from the
-# payload and is inert unless the repo carries a `.sonar-gate` file.
+# the Java conventions (conventions/java.md); the gate belongs on the session itself now,
+# which is where the Java work actually happens. Nothing in the body changed: the trigger
+# already read `.cwd` from the payload and is inert unless the repo carries a `.sonar-gate`
+# file.
 #
 # The rule it enforces is one a model cannot check itself. A self-review loop spawning
 # `code-reviewer` is a model checking a model, and that is the wrong instrument for a property
@@ -92,7 +93,7 @@
 # A green run is remembered: a Stop whose fingerprinted inputs match the last green run skips the
 # scan instead of paying for another Maven build. The fingerprint covers the base commit, and the
 # diff against it plus the untracked files for java sources, poms, the contract schemas that
-# rules/java.md treats as code, the JS project's directory and the rules file; then
+# rules/java.md's paths: lists, the JS project's directory and the rules file; then
 # `.sonar-gate`, the gate script and this hook. Only a green
 # run records it, and it is taken before the change set is read: anything that lands later,
 # mid-scan included, changes the next fingerprint instead of being recorded as clean without

@@ -114,9 +114,15 @@ def injection(uid: str, *texts: str) -> dict:
                       hookName="SessionStart", hookEvent="SessionStart")
 
 
-def tool(name: str, tool_input: dict) -> dict:
+def tool(name: str, tool_input: dict, tool_id: str = "") -> dict:
     return {"type": "assistant", "message": {"content": [
-        {"type": "tool_use", "id": f"t-{name}", "name": name, "input": tool_input}]}}
+        {"type": "tool_use", "id": tool_id or f"t-{name}", "name": name, "input": tool_input}]}}
+
+
+def result(tool_id: str, uid: str, text: str, kind: str = "text", is_error: bool = False) -> dict:
+    return {"type": "user", "uuid": uid, "toolUseResult": {"type": kind},
+            "message": {"content": [{"type": "tool_result", "tool_use_id": tool_id,
+                                     "content": text, "is_error": is_error}]}}
 
 
 def boundary(*preserved: str) -> dict:
@@ -151,6 +157,15 @@ BASH_SHAPES = [
     "cat > ~/.claude/skills/written/SKILL.md <<EOF\nhello\nEOF",
     "sed -i '' 's/a/b/' ~/.claude/skills/edited/SKILL.md",
     "ls ~/.claude/skills/scoping/\ncat ~/.claude/skills/newline/SKILL.md",
+    "cat < ~/.claude/skills/stdin-read/SKILL.md",
+    "echo 'unbalanced; cat > ~/.claude/skills/fallback-written/SKILL.md",
+    "cd ~/.claude/skills/x-up/references && cd ../../dotdot/references && cat ../SKILL.md",
+    "cd ~/.claude/skills && cd relcd && head SKILL.md",
+    "A=1 B=$HOME/.claude/skills/multi-assign/SKILL.md; head $B",
+    'export F=~/.claude/skills/exported/SKILL.md; cat "$F"',
+    "D=~/.claude/skills; F=$D/chained/SKILL.md; tail $F",
+    ("for f in ~/.claude/skills/loop-a/SKILL.md ~/.claude/skills/loop-b/references/x.md; "
+     'do head -n 3 "$f"; done'),
 ]
 
 
@@ -249,15 +264,18 @@ def test_analysis(run, config: Path) -> None:
     check("analyze: SKILL.md reads without an invocation, through Read, Bash and variables",
           main.get("skill_md_read_without_invoke") == {
               "md2pdf": 1, "adr": 1, "pdf": 1, "java-performance-patterns": 1, "braced": 1,
-              "fallback": 1, "newline": 1}, json.dumps(main.get("skill_md_read_without_invoke")))
+              "fallback": 1, "newline": 1, "stdin-read": 1, "dotdot": 1, "relcd": 1,
+              "multi-assign": 1, "exported": 1, "chained": 1, "loop-a": 1},
+          json.dumps(main.get("skill_md_read_without_invoke")))
     check("analyze: other skill files read without an invocation, after cd, quoted | and ;",
           main.get("skill_files_read_without_invoke") == {
               "quiz": 1, "hexagonal-ddd-java": 1, "java-security-baseline": 1,
-              "client-comms": 1, "grepped": 1},
+              "client-comms": 1, "grepped": 1, "loop-b": 1},
           json.dumps(main.get("skill_files_read_without_invoke")))
-    check("analyze: ls, wc, Glob, a redirect target and sed -i are not reads",
+    check("analyze: ls, wc, Glob, a redirect target, sed -i and a path before ../ are not reads",
           not any(name in json.dumps(main) for name in ("scoping", "written", "edited",
-                                                        "fallback-ls")),
+                                                        "fallback-ls", "fallback-written",
+                                                        "x-up")),
           json.dumps(main))
     check("analyze: a synced skill keeps its own name",
           "synced" not in json.dumps(main.get("skill_md_read_without_invoke")),
@@ -266,6 +284,8 @@ def test_analysis(run, config: Path) -> None:
     check("analyze: a pointer stub is its own mechanism and not a copy of the body",
           stubbed.get("stub") == 1 and stubbed.get("native") == 0
           and stubbed.get("copies_in_context") == 0, json.dumps(stubbed))
+    check("analyze: a stub compacted away is no longer in context",
+          stubbed.get("stubs_in_context") == 0, json.dumps(stubbed))
     check("analyze: compactions are counted", main.get("compactions") == 2, json.dumps(main))
     sub = (report.get("subagents") or [{}])[0]
     sub_frontend = sub.get("rules", {}).get("frontend", {})
@@ -292,6 +312,46 @@ def test_analysis(run, config: Path) -> None:
     late = json.loads(proc.stdout)["main"]["rules"].get("late", {}) if proc.returncode == 0 else {}
     check("analyze: a rule first loaded after a file tool is not marked as early",
           late.get("before_first_file_tool") is False, proc.stdout[-300:])
+
+    reads_sid = "88888888-2222-3333-4444-555555555555"
+    body = "1\t# Java conventions\n2\tRecords for value objects.\n"
+    write_jsonl(config / "projects" / "p" / f"{reads_sid}.jsonl", [
+        {"type": "user", "cwd": "/work", "message": {"content": "review it"}},
+        injection("b0", FRONTEND_POINTER),
+        native("b1", config / "rules" / "kotlin.md", "\n[rule-stub kotlin] Read the body."),
+        native("b2", config / "rules" / "kotlin.md", "[rule-stub kotlin] Read the body."),
+        tool("Read", {"file_path": str(config / "conventions" / "java.md")}, "r1"),
+        result("r1", "b3", body),
+        tool("Read", {"file_path": str(config / "conventions" / "java.md")}, "r2"),
+        result("r2", "b4", "Unchanged since the earlier read.", kind="file_unchanged"),
+        tool("Bash", {"command": "cat ~/.claude/conventions/swift.md"}, "r3"),
+        result("r3", "b5", "cat: no such file", is_error=True),
+        tool("Bash", {"command": "cat ~/.claude/conventions/kotlin.md > /tmp/copy.md"}, "r6"),
+        result("r6", "b8", ""),
+        tool("Read", {"file_path": "/work/App.java"}, "r4"),
+        result("r4", "b6", "class App {}"),
+        tool("Bash", {"command": "cd ~/.claude/conventions && head -n 5 frontend.md"}, "r5"),
+        result("r5", "b7", "# Frontend")])
+    proc = run("analyze", reads_sid)
+    read_rules = json.loads(proc.stdout)["main"]["rules"] if proc.returncode == 0 else {}
+    java_read, kotlin = read_rules.get("java", {}), read_rules.get("kotlin", {})
+    check("analyze: a Read of a body is a copy of its own mechanism, a repeat notice is not",
+          java_read.get("read") == 1 and java_read.get("copies_in_context") == 1
+          and java_read.get("chars_in_context") == len(body), json.dumps(java_read))
+    check("analyze: a failed read of a body loads nothing", "swift" not in read_rules,
+          json.dumps(read_rules))
+    check("analyze: a Bash read of a body after cd counts too",
+          read_rules.get("frontend", {}).get("read") == 1, json.dumps(read_rules.get("frontend")))
+    check("analyze: a stub after leading whitespace is still a stub, and stubs are counted",
+          kotlin.get("stub") == 2 and kotlin.get("native") == 0
+          and kotlin.get("stubs_in_context") == 2, json.dumps(kotlin))
+    check("analyze: a body read that printed nothing loads nothing",
+          kotlin.get("read") == 0 and kotlin.get("copies_in_context") == 0, json.dumps(kotlin))
+    check("analyze: only a body makes a rule early, and reading a body is not the first file tool",
+          java_read.get("before_first_file_tool") is True
+          and kotlin.get("before_first_file_tool") is False
+          and read_rules.get("frontend", {}).get("before_first_file_tool") is False,
+          json.dumps(read_rules))
 
     config_sid = "77777777-2222-3333-4444-555555555555"
     write_jsonl(config / "projects" / "c" / f"{config_sid}.jsonl", [
@@ -329,6 +389,15 @@ def test_case_validation(run, home: Path) -> None:
         ("an unknown fixture",
          [{"id": "c1", "fixture": "nope", "steps": ["go"]}], "unknown fixture"),
         ("empty steps", [{"id": "c1", "fixture": "java", "steps": []}], "steps"),
+        ("a misspelled rubric key",
+         [{"id": "c1", "fixture": "java", "steps": ["go"], "rubric": {"must_flag": ["x"]}}],
+         "'rubric' takes only"),
+        ("an empty rubric list",
+         [{"id": "c1", "fixture": "java", "steps": ["go"], "rubric": {"must_find": []}}],
+         "'rubric' takes only"),
+        ("a rubric item that is not a description",
+         [{"id": "c1", "fixture": "java", "steps": ["go"], "rubric": {"must_find": [3]}}],
+         "'rubric' takes only"),
     ]
     for name, cases, message in rows:
         proc = run("run", str(cases_file(home / "case.json", cases)), "--dry-run")
@@ -359,9 +428,10 @@ def test_runs(run, env: dict, home: Path, config: Path) -> None:
                             Path(env["FAKE_CALLS"]))
     good = cases_file(home / "good.json", [
         {"id": "read-java", "fixture": "java", "steps": ["read it", "background"],
-         "expect": {"rules_loaded": ["java"], "rules_not_loaded": ["swift", "frontend"],
+         "expect": {"rules_loaded": ["java", "kotlin"], "rules_not_loaded": ["swift", "frontend"],
                     "skills_load": ["java-financial-correctness"],
-                    "skills_not_load": ["md2pdf"]}},
+                    "skills_not_load": ["md2pdf"]},
+         "rubric": {"must_find": ["the seeded defect"], "must_not_flag": ["the correct one"]}},
         {"id": "other", "fixture": "java", "steps": ["x"], "repeats": 1}])
     proc = run("run", str(good), "--dry-run", "--repeats", "2")
     check("dry-run: lists every run, the step total and both paths, and writes nothing",
@@ -423,13 +493,17 @@ def test_runs(run, env: dict, home: Path, config: Path) -> None:
     check("run: the answer is the last non-empty result, not the first or the empty trailer",
           (record.get("steps") or [{}, {}])[1].get("text") == "final answer",
           json.dumps(record.get("steps")))
+    check("run: the case's rubric is stored in each run record for the grader",
+          record.get("rubric") == {"must_find": ["the seeded defect"],
+                                   "must_not_flag": ["the correct one"]},
+          json.dumps(record.get("rubric")))
     main_view = summary.get("contexts", {}).get("main", {}).get("rules", {}).get("java", {})
     sub_view = (summary.get("contexts", {}).get("subagent:code-reviewer", {})
                 .get("rules", {}).get("frontend", {}))
     check("run: the summary splits mechanisms per rule and per context",
           main_view.get("runs injected") == 2 and main_view.get("runs native") == 2
-          and main_view.get("runs with 2+ copies") == 2 and sub_view.get("runs native") == 2
-          and sub_view.get("runs before first file tool") == 0,
+          and main_view.get("runs read") == 2 and main_view.get("runs with 2+ copies") == 2
+          and sub_view.get("runs native") == 2 and sub_view.get("runs before first file tool") == 0,
           json.dumps(summary.get("contexts")))
     skill_view = summary.get("skills", {}).get("java-financial-correctness", {})
     check("run: the summary splits skill invocations from direct reads",
@@ -507,6 +581,12 @@ def test_runs(run, env: dict, home: Path, config: Path) -> None:
     check("run: a run without analysis is counted apart, not judged as unmet",
           broken_summary.get("runs without analysis") == 1 and broken_summary.get("unmet") == [],
           json.dumps(broken_summary))
+    broken_record = next(results.glob("*/broken-r1/run.json"))
+    first_error = json.loads(broken_record.read_text()).get("error") or ""
+    run("report", str(broken_record.parent.parent))
+    check("report: a run with no analysis keeps its stored error text",
+          first_error.startswith("no transcript")
+          and json.loads(broken_record.read_text()).get("error") == first_error, first_error)
     violated = cases_file(home / "violated.json", [
         {"id": "violated", "fixture": "java", "steps": ["x"], "repeats": 1,
          "expect": {"rules_not_loaded": ["java"]}}])
@@ -539,11 +619,12 @@ def test_runs(run, env: dict, home: Path, config: Path) -> None:
     totals = json.loads(proc.stdout) if proc.returncode == 0 else {}
     java_totals = totals.get("rules", {}).get("java", {})
     check("scan: eval and config-dir sessions are left out by default",
-          totals.get("sessions") == 2, proc.stdout[-400:])
-    check("scan: counts injections, duplicates, excess characters and subagent loads",
+          totals.get("sessions") == 3, proc.stdout[-400:])
+    check("scan: counts injections, duplicates, excess characters, reads and subagent loads",
           java_totals.get("sessions injected") == 1
           and java_totals.get("sessions with 2+ copies") == 1
           and java_totals.get("excess chars") == len(JAVA_2)
+          and java_totals.get("sessions read in main") == 1
           and totals.get("rules", {}).get("frontend", {}).get(
               "native loads in subagent:code-reviewer") == 1, json.dumps(totals.get("rules")))
     check("scan: skill metrics are split the same way",
@@ -551,11 +632,11 @@ def test_runs(run, env: dict, home: Path, config: Path) -> None:
               "sessions skill_md_read_without_invoke") == 1, json.dumps(totals.get("skills")))
     proc = run("scan", "--summary", "--include-config")
     check("scan: --include-config keeps sessions run inside the config directory",
-          json.loads(proc.stdout).get("sessions") == 3, proc.stdout[-300:])
+          json.loads(proc.stdout).get("sessions") == 4, proc.stdout[-300:])
     eval_sessions = len(list((config / "projects" / "fake").glob("*.jsonl")))
     proc = run("scan", "--summary", "--include-evals")
     check("scan: --include-evals keeps the harness's own sessions",
-          eval_sessions >= 5 and json.loads(proc.stdout).get("sessions") == 2 + eval_sessions,
+          eval_sessions >= 5 and json.loads(proc.stdout).get("sessions") == 3 + eval_sessions,
           f"{eval_sessions} eval transcripts; {proc.stdout[-300:]}")
     proc = run("scan", "--since", "2999-01-01")
     check("scan: --since filters by session start",
@@ -577,7 +658,13 @@ def test_eval_config() -> None:
                                                               / "SKILL.md")}),
                                tool("Read", {"file_path": str(config / "skills" / "md2pdf"
                                                               / "SKILL.md")}),
-                               native("r4", config / "rules" / "java.md", "j" * 30)])
+                               native("r4", config / "rules" / "java.md", "j" * 30),
+                               tool("Read", {"file_path": str(config / "conventions"
+                                                              / "java.md")}, "tr"),
+                               result("tr", "r6", "1\t# Java conventions\n"),
+                               tool("Bash", {"command": "cat ~/.claude/conventions/kotlin.md"},
+                                    "tk"),
+                               result("tk", "r7", "# Kotlin conventions\n")])
         subagent = home / "subagent.jsonl"
         write_jsonl(subagent, subagent_transcript(config))
         env = {**os.environ, "HOME": str(home), "CLAUDE_CONFIG_DIR": str(config),

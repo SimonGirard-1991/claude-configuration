@@ -1,0 +1,197 @@
+{
+  "addition": "swift-rule",
+  "description": "The Swift rule: detection and native loading per fixture, and a review of seeded defects graded against the rubric. Run 'review' with the daily model and effort, baseline before the rule goes live and treatment after; run the other cases with a small model, since they measure loading, not judgement. A grader subagent sorts each review finding as a must_find hit, another useful finding, or a false positive, and lists each must_find item it missed. The game fixture stays as it is so rounds stay comparable, even where it falls short of a later rule: give the grader the rule's Stack and Verification sections, or those gaps read as false positives.",
+  "fixtures": {
+    "game": {
+      "project.yml": "name: Blocks\noptions:\n  deploymentTarget:\n    iOS: \"18.0\"\npackages:\n  BlockCore:\n    path: Packages/BlockCore\nsettings:\n  base:\n    SWIFT_VERSION: \"6.0\"\ntargets:\n  Blocks:\n    type: application\n    platform: iOS\n    sources: [App]\n    dependencies:\n      - package: BlockCore\n    settings:\n      base:\n        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor\n  BlocksUITests:\n    type: bundle.ui-testing\n    platform: iOS\n    sources: [AppUITests]\n    dependencies:\n      - target: Blocks\n",
+      ".swift-format": "{\n  \"version\": 1,\n  \"lineLength\": 120,\n  \"indentation\": { \"spaces\": 4 }\n}\n",
+      "Packages/BlockCore/Package.swift": "// swift-tools-version: 6.2\nimport PackageDescription\n\nlet package = Package(\n    name: \"BlockCore\",\n    platforms: [.iOS(.v18), .macOS(.v15)],\n    products: [.library(name: \"BlockCore\", targets: [\"BlockCore\"])],\n    targets: [\n        .target(name: \"BlockCore\"),\n        .testTarget(name: \"BlockCoreTests\", dependencies: [\"BlockCore\"]),\n    ]\n)\n",
+      "Packages/BlockCore/Sources/BlockCore/Board.swift": "public struct Board: Sendable, Equatable {\n    public static let width = 10\n    public static let height = 20\n\n    public private(set) var rows: [[Bool]]\n\n    public init() {\n        rows = Array(repeating: Array(repeating: false, count: Board.width), count: Board.height)\n    }\n\n    public var highestFilledRow: Int {\n        rows.firstIndex(where: { $0.contains(true) })!\n    }\n\n    public mutating func fill(row: Int, column: Int) {\n        rows[row][column] = true\n    }\n\n    public mutating func clearFullRows() -> Int {\n        let kept = rows.filter { $0.contains(false) }\n        let cleared = rows.count - kept.count\n        rows = Array(repeating: Array(repeating: false, count: Board.width), count: cleared) + kept\n        return cleared\n    }\n}\n",
+      "Packages/BlockCore/Sources/BlockCore/ScoreLedger.swift": "public final class ScoreLedger: @unchecked Sendable {\n    public static let shared = ScoreLedger()\n\n    public private(set) var entries: [Int] = []\n\n    public func record(_ points: Int) {\n        entries.append(points)\n    }\n\n    public var total: Int { entries.reduce(0, +) }\n}\n",
+      "Packages/BlockCore/Sources/BlockCore/HighScores.swift": "public actor HighScores {\n    private var scores: [Int] = []\n\n    public init() {}\n\n    public func submit(_ score: Int) {\n        scores.append(score)\n        scores.sort(by: >)\n        scores = Array(scores.prefix(10))\n    }\n\n    public var best: Int? { scores.first }\n}\n",
+      "Packages/BlockCore/Tests/BlockCoreTests/BoardTests.swift": "import XCTest\n@testable import BlockCore\n\nfinal class BoardTests: XCTestCase {\n    func testClearsAFullRow() {\n        // Arrange\n        var board = Board()\n        for column in 0..<Board.width { board.fill(row: 19, column: column) }\n\n        // Act\n        let cleared = board.clearFullRows()\n\n        // Assert\n        XCTAssertEqual(cleared, 1)\n        XCTAssertFalse(board.rows[19].contains(true))\n    }\n}\n",
+      "Packages/BlockCore/Tests/BlockCoreTests/HighScoresTests.swift": "import Testing\n@testable import BlockCore\n\nstruct HighScoresTests {\n    @Test(arguments: [[3, 9, 4], [9], [1, 9, 2, 8]])\n    func bestIsTheHighestSubmitted(scores: [Int]) async {\n        // Arrange\n        let highScores = HighScores()\n        for score in scores { await highScores.submit(score) }\n\n        // Act\n        let best = await highScores.best!\n\n        // Assert\n        #expect(best == 9)\n    }\n}\n",
+      "App/GameModel.swift": "import BlockCore\nimport Observation\n\n@MainActor\n@Observable\nfinal class GameModel {\n    private(set) var board = Board()\n    var score = 0\n\n    var dangerRow: Int { board.highestFilledRow }\n\n    func lockPiece(row: Int, column: Int) {\n        board.fill(row: row, column: column)\n        let cleared = board.clearFullRows()\n        score += cleared * 100\n        Task.detached {\n            ScoreLedger.shared.record(cleared * 100)\n        }\n    }\n}\n",
+      "App/GameView.swift": "import SwiftUI\n\nstruct GameView: View {\n    @State private var model = GameModel()\n\n    var body: some View {\n        VStack(spacing: 12) {\n            Text(\"Score \\(model.score)\")\n            Text(\"Danger row \\(model.dangerRow)\")\n            Button(\"Drop\") { model.lockPiece(row: 19, column: 0) }\n        }\n        .onAppear { startBonusTimer() }\n    }\n\n    private func startBonusTimer() {\n        DispatchQueue.global().asyncAfter(deadline: .now() + 30) {\n            model.score += 500\n        }\n    }\n}\n",
+      "AppUITests/LaunchTests.swift": "import XCTest\n\nfinal class LaunchTests: XCTestCase {\n    @MainActor\n    func testLaunchShowsTheScore() throws {\n        // Arrange\n        let app = XCUIApplication()\n\n        // Act\n        app.launch()\n\n        // Assert\n        XCTAssertTrue(app.staticTexts[\"Score 0\"].waitForExistence(timeout: 5))\n    }\n}\n"
+    },
+    "xcodegen-only": {
+      "project.yml": "name: Lantern\noptions:\n  deploymentTarget:\n    tvOS: \"18.0\"\ntargets:\n  Lantern:\n    type: application\n    platform: tvOS\n    sources: [Sources]\n",
+      "Sources/App.swift": "import SwiftUI\n\n@main\nstruct LanternApp: App {\n    var body: some Scene {\n        WindowGroup { Text(\"Lantern\") }\n    }\n}\n"
+    },
+    "other-yml": {
+      "project.yml": "name: docs-site\ntargets:\n  production:\n    type: static\n    platform: linux\n    region: eu-west-1\n",
+      "README.md": "# Docs site\n\nDeployment targets live in project.yml.\n"
+    },
+    "mixed-apple": {
+      "backend/pom.xml": "<project>\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>demo</groupId>\n  <artifactId>demo</artifactId>\n  <version>1</version>\n</project>\n",
+      "backend/src/main/java/demo/Greeter.java": "package demo;\n\npublic final class Greeter {\n    public String greet(String name) {\n        return \"Hello \" + name;\n    }\n}\n",
+      "app/project.yml": "name: Lantern\noptions:\n  deploymentTarget:\n    tvOS: \"18.0\"\ntargets:\n  Lantern:\n    type: application\n    platform: tvOS\n    sources: [Sources]\n",
+      "app/Sources/App.swift": "import SwiftUI\n\n@main\nstruct LanternApp: App {\n    var body: some Scene {\n        WindowGroup { Text(\"Lantern\") }\n    }\n}\n"
+    },
+    "java": {
+      "pom.xml": "<project>\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>demo</groupId>\n  <artifactId>demo</artifactId>\n  <version>1</version>\n</project>\n",
+      "README.md": "# Demo\n\nA greeter.\n",
+      "src/main/java/demo/Greeter.java": "package demo;\n\npublic final class Greeter {\n    public String greet(String name) {\n        return \"Hello \" + name;\n    }\n}\n"
+    },
+    "react": {
+      "package.json": "{\n  \"name\": \"demo-web\",\n  \"private\": true,\n  \"dependencies\": { \"next\": \"16.0.0\", \"react\": \"19.0.0\", \"react-dom\": \"19.0.0\" }\n}\n",
+      "app/page.tsx": "export default function Page() {\n  return <main>Hello</main>;\n}\n",
+      "lib/format.ts": "export function label(name: string): string {\n  return `Hello ${name}`;\n}\n"
+    },
+    "react-native": {
+      "package.json": "{\n  \"name\": \"demo-rn\",\n  \"private\": true,\n  \"dependencies\": { \"react\": \"19.0.0\", \"react-native\": \"0.80.0\" }\n}\n",
+      "App.tsx": "export default function App() {\n  return null;\n}\n",
+      "ios/App.xcodeproj/project.pbxproj": "// !$*UTF8*$!\n{\n}\n",
+      "ios/App/AppDelegate.swift": "import UIKit\n\nfinal class AppDelegate: UIResponder {}\n"
+    }
+  },
+  "cases": [
+    {
+      "id": "review",
+      "fixture": "game",
+      "steps": [
+        "I'm about to build on this code. Review the Swift sources in this repo and list concrete problems by file, most severe first. Don't change any files."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "swift"
+        ]
+      },
+      "rubric": {
+        "must_find": [
+          "ScoreLedger is a class with mutable state, shared through a static and marked @unchecked Sendable with no synchronization, and detached tasks write to it: a data race (an actor, or state kept in the main-actor model, fixes it)",
+          "Board.highestFilledRow force-unwraps firstIndex, which is nil on an empty board, so the view crashes when a game starts",
+          "GameView.startBonusTimer mutates the main-actor GameModel from DispatchQueue.global, off the main actor",
+          "BoardTests uses XCTest (XCTestCase) for a plain unit test of the core, where Swift Testing is the convention"
+        ],
+        "must_not_flag": [
+          "HighScores being an actor",
+          "LaunchTests using XCTest and XCUIApplication for a UI test",
+          "GameModel being a @MainActor @Observable final class"
+        ]
+      }
+    },
+    {
+      "id": "swift-plan",
+      "fixture": "game",
+      "steps": [
+        "Without using any tool, reply with a one-line plan for adding a hold-piece feature to this game."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "swift"
+        ]
+      }
+    },
+    {
+      "id": "swift-crash-read",
+      "fixture": "game",
+      "steps": [
+        "The app crashes as soon as a new game starts. Use the Read tool to read Packages/BlockCore/Sources/BlockCore/Board.swift, then reply with one line naming the likely cause. Do nothing else."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "swift"
+        ]
+      }
+    },
+    {
+      "id": "swift-bash-cat",
+      "fixture": "game",
+      "steps": [
+        "Run exactly this command with the Bash tool and nothing else: cat App/GameModel.swift\nThen reply DONE."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "swift"
+        ]
+      }
+    },
+    {
+      "id": "xcodegen-read",
+      "fixture": "xcodegen-only",
+      "steps": [
+        "Use the Read tool to read Sources/App.swift. Then reply DONE. Do nothing else."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "swift"
+        ]
+      }
+    },
+    {
+      "id": "other-yml-read",
+      "fixture": "other-yml",
+      "steps": [
+        "Use the Read tool to read project.yml. Then reply DONE. Do nothing else."
+      ],
+      "expect": {
+        "rules_not_loaded": [
+          "swift"
+        ]
+      }
+    },
+    {
+      "id": "java-task",
+      "fixture": "java",
+      "steps": [
+        "Use the Read tool to read src/main/java/demo/Greeter.java, then reply with a one-line plan for adding a farewell method. Do nothing else."
+      ],
+      "expect": {
+        "rules_not_loaded": [
+          "swift"
+        ]
+      }
+    },
+    {
+      "id": "react-task",
+      "fixture": "react",
+      "steps": [
+        "Use the Read tool to read app/page.tsx, then reply with a one-line plan for adding a loading state. Do nothing else."
+      ],
+      "expect": {
+        "rules_not_loaded": [
+          "swift"
+        ]
+      }
+    },
+    {
+      "id": "swift-subagent-review",
+      "fixture": "game",
+      "steps": [
+        "Use the Agent tool with subagent_type code-reviewer. Ask it to review Packages/BlockCore/Sources/BlockCore/Board.swift as if the whole file were new, in at most three bullets. Then reply DONE."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "swift"
+        ]
+      }
+    },
+    {
+      "id": "mixed-read-both",
+      "fixture": "mixed-apple",
+      "steps": [
+        "Use the Read tool to read backend/src/main/java/demo/Greeter.java, then use it again to read app/Sources/App.swift. Then reply DONE. Do nothing else."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "java",
+          "swift"
+        ]
+      }
+    },
+    {
+      "id": "react-native-swift-read",
+      "fixture": "react-native",
+      "steps": [
+        "Use the Read tool to read ios/App/AppDelegate.swift. Then reply DONE. Do nothing else."
+      ],
+      "expect": {
+        "rules_not_loaded": [
+          "swift"
+        ]
+      }
+    }
+  ]
+}

@@ -106,13 +106,15 @@ When reviewing code, you focus on **recently written or modified code**, not the
 
 You evaluate code on three layers, in order. Code-level concerns (naming, small refactors, style) come **after** these. Do not lead a review with nits.
 
+When the diff is Java, or a contract file beside Java code (`.avsc`, `.proto`, OpenAPI YAML), read `~/.claude/conventions/java.md` before you review: it carries the standard these layers hold Java to.
+
 ### 1. Design & architecture
 - Is this the right shape? Does the change belong here?
 - Does it create coupling that will hurt later?
 - Is there a simpler design that does the same job?
 - Conversely, is the author reaching for a pattern (DDD, CQRS, hexagonal, event sourcing, microservice split) that the problem does not justify?
 - Are module boundaries respected? Is the dependency direction sane?
-- Is each class the diff touches still the right size, read whole? A diff can be small and simple while the class it lands in keeps growing. Read the whole file of every class the diff changes, and check it against the language rule's limit (`~/.claude/rules/java.md` § Simplicity for Java). A class this diff pushes over the limit, or grows while it is already over, is 🟡. A class that was already over and does not grow gets a 🔵 note, so a small fix in a big class does not become a refactoring request. Judge the public surface and the length too: a class doing two jobs is a 🔵 split finding even under the limit. In a `ConstructorDependenciesTest`, a recorded count that goes up, or a new entry for a class that was under the limit, or absent, before this diff, is 🔴, because it lets a class grow past review. Entries recorded in the commit that introduces the test, a rename that keeps its count, and a count lowered or removed are fine.
+- Is each class the diff touches still the right size, read whole? A diff can be small and simple while the class it lands in keeps growing. Read the whole file of every class the diff changes, and check it against the language rule's limit (`~/.claude/conventions/java.md` § Simplicity for Java). A class this diff pushes over the limit, or grows while it is already over, is 🟡. A class that was already over and does not grow gets a 🔵 note, so a small fix in a big class does not become a refactoring request. Judge the public surface and the length too: a class doing two jobs is a 🔵 split finding even under the limit. In a `ConstructorDependenciesTest`, a recorded count that goes up, or a new entry for a class that was under the limit, or absent, before this diff, is 🔴, because it lets a class grow past review. Entries recorded in the commit that introduces the test, a rename that keeps its count, and a count lowered or removed are fine.
 - Is this testable in isolation, or does it force integration tests for trivial logic?
 
 ### 2. Correctness & resilience
@@ -160,7 +162,7 @@ The mechanical layer is the author's job, not yours: run `shellcheck` / `shfmt -
 ### The frontend lens
 
 When the diff is React / Next.js App Router / TypeScript rather than backend code, swap in
-these axes. Read `~/.claude/rules/frontend.md` before you review: it carries the full
+these axes. Read `~/.claude/conventions/frontend.md` before you review: it carries the full
 standard, and this lens is only the review shape and the severity each failure earns.
 
 - **Server/client boundary**: anything marked `"use client"` that need not be? A layout
@@ -197,6 +199,48 @@ standard, and this lens is only the review shape and the severity each failure e
 - **Operability**: client-side error tracking wired for unexpected throws; user-facing
   messages that do not leak stack traces, SQL or internal IDs; error boundaries placed to
   contain blast radius.
+
+### The Swift lens
+
+When the diff is Swift on Apple platforms, swap in these axes. Read
+`~/.claude/conventions/swift.md` before you review: it carries the full standard, and this
+lens is only the review shape and the severity each failure earns.
+
+- **Isolation and data races are 🔴.** Mutable state shared across tasks outside an actor,
+  `@unchecked Sendable` or `nonisolated(unsafe)` added to quiet the compiler, a
+  non-`Sendable` value crossing an isolation boundary. Swift 6 mode rejects most races at
+  compile time, and these escape hatches are how the rest get through.
+- **UI work off the main actor is 🔴.** A `@MainActor` model or a view's state changed from
+  `DispatchQueue.global`, a detached task or a `@concurrent` function.
+- **Retain cycles are 🟡.** A stored escaping closure that captures `self` strongly and can
+  outlive its work, in the object that keeps it: a callback property, a long-running `Task`
+  held in a property, a timer or subscription. A closure that does not outlive the call,
+  or a finite task whose work must finish, needs no `[weak self]`; do not ask for one.
+- **Suspension points are 🟡.** An actor invariant assumed across an `await`, an async
+  result applied after its request went stale, a `Task { }` that nothing owns or cancels,
+  a long-running task that keeps its presentation model alive (`await self?.run()` under
+  `[weak self]` does), and a finite task whose weak capture can drop work that must finish.
+- **Force unwraps are 🟡, tests included, and 🔴 on data from outside the process**
+  (network, disk, user input). `!`, `try!` and `as!` on a value that can legitimately be
+  absent crash the app, or in a test the whole test run. Tests use `try #require`
+  (`XCTUnwrap` in a UI test).
+- **Core/UI separation is 🟡.** Domain or game logic in a view or a view model instead of
+  the SPM core, a core file importing SwiftUI or UIKit, a core type that is not `Sendable`.
+- **Accessibility is correctness — a failure is 🔴.** Walk `swift.md` § Accessibility item
+  by item against the UI the diff changes, rather than from memory of it.
+- **SwiftUI identity is 🟡.** `ForEach` over the indices of a mutable array, `id: \.self`
+  on values that are not unique, an id that changes on every render, or state reset because
+  a conditional swapped a view's identity.
+- **`#available`**: the compiler already rejects an API newer than the deployment target
+  without a check, so judge the rest. A fallback that silently drops a feature the user
+  relies on is 🟡; a check at or below the deployment target is dead code, 🔵.
+- **Tests**: a new unit test in XCTest rather than Swift Testing is 🔵. Tests that share a
+  file, a store or global state while running in parallel are 🟡: they fail at random. A
+  changed screen or state that no UI test navigates to and audits is 🔵.
+
+The mechanical layer is the author's job: `swift test`, `xcodebuild test` and
+`swift format lint --strict --recursive` are expected clean. If they obviously were not
+run, say so with the output rather than hand-linting.
 
 ## Engineering standards you hold the code to
 

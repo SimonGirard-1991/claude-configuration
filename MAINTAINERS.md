@@ -10,7 +10,7 @@ show in this repo, an edit or a new file (2026-10-11; see the decision log).
 
 | Agent | Role | Invoked by |
 |---|---|---|
-| `code-reviewer` | Staff-level review of a diff: design, correctness, operability, code-level. Severity-tagged 🔴/🟡/🔵, verdict ✅/⚠️/🔴. | The user directly, or a session running the self-review loop in `rules/java.md` or `rules/frontend.md`. |
+| `code-reviewer` | Staff-level review of a diff: design, correctness, operability, code-level. Severity-tagged 🔴/🟡/🔵, verdict ✅/⚠️/🔴. | The user directly, or a session running the self-review loop in a body in `conventions/`. |
 | `learning-doc-writer` | Pandoc-ready learning documents, with a mandatory independent adversarial review before hand-back. | The user directly, or auto-routed on its description. |
 
 Both are `model: inherit`. The one deliberate exception is inside
@@ -41,6 +41,175 @@ Edge cases: a ⚠️ verdict carrying only 🔵 issues may return to the user un
 says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
+
+- **The rule bodies moved to `conventions/`, each `rules/` file is now a stub, and Swift is
+  the third rule** (2026-10-22, Phase 1 of the language-rules plan). The Swift rule's
+  observation window starts at this change's commit. It runs 21 days or 5 sessions in Swift
+  repos, whichever is later.
+  - **The mechanism.** `session-rules.sh` injects bodies from `conventions/`. One table gives
+    each rule its label, markers, search depth and a veto. `validate-rules.sh` checks every
+    body against the real hook from one fixture table. It also compares the self-review
+    loops across all bodies and checks each stub. The reviewer's Java, frontend and Swift
+    lenses read their body explicitly. The Java body lost its note on the contract globs.
+    A YAML comment in the stub's frontmatter carries it now, beside the globs it explains.
+  - **Loading, measured on CLI 2.1.308 with haiku at low effort.** Phase 0's matrix ran once
+    per case, and the Swift cases three times each:
+    - No context held a body twice or two stubs. Every main-context body came from the
+      injection, before the first file tool.
+    - A stub is 227 characters for Java, 286 for frontend and 271 for Swift. A body is 8.4k
+      to 9.5k. The loading runs used the first Swift body, at 5.2k.
+    - Angular's `.ts`, `.scss` and `tailwind.config.js` now load nothing. The frontend stub
+      dropped `.ts`, `.js`, `.mjs`, `.css` and `.scss`, as planned, and `tailwind.config.*`
+      too, because Angular repos use Tailwind.
+    - In React Native, `App.tsx` loads the frontend stub and `ios/*.swift` the Swift stub.
+      No run read either body. **Accepted:** a stub costs under 300 characters and says
+      the rule does not apply there.
+    - A `cat` of two files, a piped `cat`, and a compound `git status && cat -n f` still load
+      nothing natively.
+    - Tetris got one injected body (5,405 characters) and one stub after a Read and an
+      Edit. The probe ran in a local clone, which has no `.xcodeproj`, since Tetris
+      gitignores it. A mixed Java and XcodeGen repo got one body and one stub per rule.
+  - **The reviewer reads its body.** At haiku and low effort, the Swift reviewer read it in
+    1 of 3 runs, and no stub reached it, because it read files through compound commands.
+    On the daily model, opus at xhigh, it read the body in 3 of 3 Swift runs and in 3 of 3
+    Java runs. Each time, that read was the reviewer's only copy, beside its stub.
+  - **Swift detection** finds `Package.swift`, a `*.xcodeproj` or `*.xcworkspace`
+    directory, or an XcodeGen `project.yml` at depth 2 or less. The `project.yml` counts
+    only when a target in its top-level `targets:` declares `type:` and an Apple `platform:`
+    or `supportedDestinations:` among its own keys. awk reads this, because the hook
+    already depends on nothing more. A repo whose root `package.json` depends on
+    `react-native` is vetoed, from the session's directory or its git toplevel.
+    `node_modules`, `.build`, `Pods` and `DerivedData` do not count. `test_hooks.py` checks
+    that `settings.json` runs the hook for every body. No Stop hook runs that suite, so the
+    check holds only where a change runs it, as each phase of the plan does.
+    **Accepted gap:** other cross-platform shells still get the Swift body: a React Native
+    app in a monorepo's subdirectory, Flutter's `ios/Runner.xcodeproj`, Capacitor's
+    `ios/App`. None of the owner's repos has one. Revisit when one appears.
+  - **The Swift review eval.** The fixture seeds four defects: a non-`Sendable` shared class,
+    a force unwrap, a UI mutation off the main actor, and an XCTest unit test. Opus at xhigh
+    ran three reviews per condition, and a subagent graded them blind against the rubric:
+    - baseline: 11 of 12 seeded defects found, 42 other useful findings, 5 false positives;
+    - treatment: 12 of 12, 59 and 5.
+
+    The model finds these defects without the rule, so this fixture sits at its ceiling.
+    The measured effect is more useful findings for the same false positives. "Found more
+    often" holds by one finding, and the grader marked that call borderline. Every answer
+    in both conditions flagged a `best!` in a Swift Testing test, which the rubric listed as
+    must not flag. Since `try #require` exists for this, the advice may be right, and the
+    rubric item is the owner's call.
+
+    After the revision below, and before its review fixes, three more treatment reviews ran,
+    and a fresh grader scored them blind beside the same three baseline answers, without
+    the dropped rubric item:
+    - baseline: 11 of 12 seeded defects, 34 other useful findings, 12 false positives;
+    - treatment: 12 of 12, 41 and 30.
+
+    15 of the treatment's 30 false positives are what the revised rule requires and the
+    fixture lacks: approachable concurrency, `minimumXcodeGenVersion`, the package's
+    `swiftSettings`, `performAccessibilityAudit()`, a README with the Xcode version, and a
+    gitignored `.xcodeproj`. The grader had no conventions file. Counted against the
+    rule, the treatment has 56 useful findings and 15 false positives. The rest are
+    mostly the same taste calls in both conditions: bounds checks, magic numbers,
+    `@testable`. The grader varies: like for like, the same baseline answers scored 45
+    useful findings and 2 false positives in the first round, 34 and 12 in the second.
+    So "no more false positives" holds only within that noise, and only with the rule's
+    own requirements counted as findings.
+
+    This phase's results directories hold $11.59 of runs: $11.16 for the opus reviews and
+    reviewer runs, and $0.43 for the haiku loading cases, each rounded to the cent. The
+    Tetris probe, which has no results directory, cost $0.01 more. Each treatment run
+    keeps its grader's input, key and grades in its `grading/` directory.
+  - **Facts were fetched.** The Swift rule's settings, APIs and commands were checked
+    against swift.org, Apple's documentation, SE-0461, SE-0466 and SE-0480, the swift-format
+    README, XcodeGen's ProjectSpec, and the installed Xcode 27 and Swift 6.4. No official
+    source discourages `DispatchQueue`. Its ban is the owner's convention, and the rule cites
+    none.
+  - **Revised after an independent review** (2026-10-23). The owner had another agent review
+    the Swift rule, and asked for six changes and for `!` to be banned in tests:
+    - Each project records its tool versions and OS floors. Apple has no official way to pin
+      Xcode, so its version goes in the README. `.xcode-version` was rejected: it serves a
+      third-party tool. XcodeGen enforces `options.minimumXcodeGenVersion`: 2.46 refuses a
+      spec asking for 99.0.0.
+    - The compiler, the language mode and the concurrency settings are separate items.
+      **Decided:** `NonisolatedNonsendingByDefault` is on in app and core alike, through
+      `SWIFT_APPROACHABLE_CONCURRENCY` in app targets and `.enableUpcomingFeature` in the
+      package. Tetris's app target already turns it on, Swift 6.4 lists it as a default of
+      language mode 7, and it gives a plain `nonisolated` async function one meaning
+      across app and core. A probe confirmed it through a manifest: with it on, a
+      `nonisolated` async function ran on its caller's actor; off, and with the name
+      misspelled, it ran on the generic executor. A misspelled feature name is ignored
+      without a warning, and the rule says so.
+    - `xcodegen generate` runs before every build, so added, removed or moved files cannot
+      leave the project stale.
+    - Concurrency covers actor reentrancy (SE-0306), stale async results, and who owns a
+      `Task { }`. A probe showed an `async let` child cancelled with its parent, and a
+      `Task { }` made inside that parent not cancelled. The first draft offered
+      `.task(id:)` as enough against a stale result. The review's probe showed otherwise:
+      cancellation is cooperative, and a cancelled task that does not throw still wrote the
+      old query's result last. The rule now requires a check of `Task.isCancelled` or an
+      id after the last `await`. In an `@Observable` model the task handle is
+      `@ObservationIgnored`: the pattern type-checks under the app settings, and fails
+      without it, because `deinit` cannot reach the handle. The task unwraps its
+      `[weak self]` after each `await`: a probe showed a loop that unwrapped once at the
+      top keeping its owner alive for good.
+    - Tests own their resources, since Swift Testing runs them in parallel. A timer is
+      exposed with `.updatesFrequently` instead of announced on every tick. A changed UI
+      flow gets `performAccessibilityAudit()` in its UI test, and the hand-back asks the
+      user for a VoiceOver walk, which a session cannot do.
+    - A fix made during review reruns the checks it touches. That sentence sits in the
+      Swift verification section, not in the loop, whose text all bodies share.
+    - `!`, `try!` and `as!` are banned in tests too. A probe showed a failed force unwrap
+      killing the whole Swift Testing run, with no summary and other tests' results lost,
+      where `try #require` recorded one failure and the run went on. The rubric item that
+      protected `best!` in a test was dropped. Every review had flagged it, rightly.
+  - **Revised again after a second review** (2026-10-23), on four points:
+    - **Task lifetime.** "Capture `[weak self]` and unwrap after each `await`" was too
+      blunt. A probe released two main-actor models while their tasks ran. With
+      `Task { [weak self] in await self?.run() }`, the model lived until `run()` returned,
+      30 ticks later. With `self` held strongly only inside each step, it was freed after
+      a few ticks, and the task ended. The rule now has work tied to a view run in
+      `.task { await model.run() }`, which SwiftUI cancels. A stored long-running task
+      holds `self` strongly only inside each short step. A finite task whose work must
+      finish, such as a save, captures `self` strongly on purpose, because a weak capture
+      would drop it. All three patterns type-check under the app settings.
+    - **Audit coverage.** Apple's WWDC23 session 10035 says "An audit is limited to the
+      elements on the screen". So a UI test navigates to each changed screen and state
+      and audits each, and the manual VoiceOver and large-text walk stays.
+    - **XcodeGen.** The exact version is recorded beside `minimumXcodeGenVersion`.
+      **Rejected for now:** pinning it through Mint or a tools package. Neither Swift
+      repo has CI, both are built on one machine, and the generated project is not
+      committed, so a version drift cannot change a tracked file. The rule pins it once
+      a project has CI or a second machine.
+    - **`.updatesFrequently`** is only for a value that changes too often to announce,
+      like a running timer. Apple's text says the trait makes VoiceOver poll for
+      changes.
+
+    The Swift body is now 9.5k, about 130 characters under the cap with its header, and
+    less when the header names a long marker path. The review eval was not run again:
+    these changes touch none of the fixture's seeded defects.
+  - **The harness.**
+    - It counts a read of a body in `conventions/` as its own mechanism. It leaves out a read
+      that printed nothing or got Claude Code's "file unchanged" notice. A partial read,
+      such as `grep` or `sed -n` on a body, still counts as a copy.
+    - Only a body marks a rule present before the first file tool, and a call that reads a
+      body is not that file tool.
+    - It counts stubs in context the way it counts copies.
+    - The deferred Phase 0 items are fixed: `cat < f` is a read, `../` is normalised, the
+      fallback parser reads redirects, and `export` and `for` loops are followed. Each of
+      the four surviving mutants got a fixture.
+    - A case's rubric is stored in each run record for the grader.
+    - The 18 mutants of the harness and the 19 of the two hooks all fail the suites, the six
+      the review planted included.
+    - Ruff 0.17 needs `--target-version py39`. Its default proposes `datetime.UTC`, which
+      macOS's Python 3.9 lacks.
+  - **Rejected:**
+    - A `**/*.swift` glob that skips `ios/`. Native apps use any layout, and the React
+      Native stub costs under 300 characters.
+    - Detecting Swift from any `project.yml`. Other tools use the name, like the fixture's
+      deployment file.
+    - XcodeGen's `platform: [iOS, tvOS]` read as one multi-platform target. XcodeGen makes
+      one target per platform from it. `supportedDestinations` is the multi-platform form,
+      and both count.
 
 - **A rule reaches each context once: SessionStart injects its body, and a native load brings
   only a pointer stub** (2026-10-22, Phase 0 of the language-rules plan; Phase 1 builds it).

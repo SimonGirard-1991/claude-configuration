@@ -183,7 +183,7 @@ void controllers_live_in_web_package() {
 
 ## Constructor dependencies
 
-A bean takes at most seven constructor dependencies (`~/.claude/rules/java.md` § Simplicity).
+A bean takes at most seven constructor dependencies (`~/.claude/conventions/java.md` § Simplicity).
 Sonar's java:S107 cannot keep this limit. It skips a constructor marked `@Autowired` or
 `@Inject`, and it keeps no record of the classes that were already over, so it cannot let
 them shrink step by step. The test records each bean that is over the limit today with its
