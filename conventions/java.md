@@ -92,9 +92,9 @@ skills named.
 
 ## Delegated expertise
 Before designing, implementing, advising or reviewing in hexagonal/DDD, observability,
-security, reliability/messaging, performance or testing, load the matching `java-*` or
-`hexagonal-*` skill and read the reference file its map points to. Thresholds and
-checklists live there, not in memory.
+security, reliability/messaging, performance, testing or money/time/ledgers, load the
+matching `java-*` or `hexagonal-*` skill and read the reference file its map points to.
+Thresholds and checklists live there, not in memory.
 
 ## Review scope
 

@@ -42,6 +42,151 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **`java-financial-correctness` is the Java skill for money, time and ledgers**
+  (2026-10-23, Phase 3 of the language-rules plan). It went live on 2026-10-23, and the
+  Java body's Delegated expertise routes "money/time/ledgers" to it. Its observation
+  window starts at this change's commit and runs 21 days or 5 sessions in Java repos with
+  money, booking or business-date code, whichever is later.
+  - **What it holds.** Policy and verified facts, not procedures. `money.md` has the kinds
+    of value and their precision, the rounding policy, minor units, cash steps,
+    intermediate values, allocation, `BigDecimal` traps, Postgres `numeric` and JSON.
+    `time.md` has the types, explicit zones, DST, cutoffs, `@Scheduled`, calendars and
+    `timestamptz` over JDBC. `ledgers-and-reconciliation.md` has append-only double-entry
+    postings, derived balances, breaks and idempotent import. The listing costs 511
+    characters of description. A load costs 6,003 characters of `SKILL.md`, plus 5.9k to
+    12.5k per reference opened. The Java body grew by 20 characters, to 8,616 injected.
+  - **Phase 2's money points, checked for Java.**
+    - The minor unit comes from the currency. `Currency.getDefaultFractionDigits()` is
+      ISO 4217's minor unit: JPY 0, CHF 2, BHD 3, CLF 4, and -1 for XAU and XDR. ISO's list
+      of 2026-09-17 agrees with the JDK on these. CLDR's digits are display data, and they
+      differ for HUF (0 against 2) and IQD (0 against 3), in CLDR's supplemental data and
+      in ICU4J 79.1. JDK 25.0.5 does not know UYW, which ISO lists with 4, and
+      `Currency.getInstance` throws for it.
+    - A 0.05 cash step is not a scale. `setScale(2, HALF_UP)` left 12.33 as it was.
+      CLDR's cash rounding is 0.05 for CHF and CAD, 0.50 for DKK and 5 for HUF. ICU4J
+      returns it, and the JDK has no such data. `divide(step, 0, mode).multiply(step)` gave
+      12.35 for 12.33, and for 12.325 it gave 12.35 under `HALF_UP` and 12.30 under
+      `HALF_EVEN`.
+    - "Full precision" is half true in Java, unlike Python's `Decimal`. `add`, `subtract`
+      and `multiply` without a `MathContext` are exact, and the scale grows: 1.0001 to the
+      power 365 has 1,461 digits. `divide` throws on 1/3. So the policy states one context
+      for every division, `pow` and long chain. `DECIMAL128` holds 34 digits and rounds
+      `HALF_EVEN`.
+    - An amount crosses JSON as a string, for a reason other than Python's. Jackson 3.2.4
+      and 2.22.4 read a JSON number into a `BigDecimal` field exactly, trailing zeros
+      included, where pydantic went through a float. The string protects everything
+      around that field. An untyped `Map` or `JsonNode` reads a `Double` unless
+      `USE_BIG_DECIMAL_FOR_FLOATS` is on. Node 26's `JSON.parse` turned 1234.50 into
+      1234.5. Jackson writes `1E+3` unless `WRITE_BIGDECIMAL_AS_PLAIN` is on, even with
+      `Shape.STRING`. One `withConfigOverride` plus that feature wrote `"12.30"` and
+      `"1000"` in both versions.
+  - **Facts were fetched and run, 2026-10-23.** The stack was JDK 25.0.5 with tzdb 2026e,
+    Spring Framework 7.0.10, PostgreSQL 18.6 (the current release per postgresql.org),
+    pgjdbc 42.7.14, Jackson 3.2.4 and 2.22.4, and ICU4J 79.1.
+    - Postgres rounds to a declared scale silently, ties away from zero, which is Java's
+      `HALF_UP`: `numeric(10,2)` stored 2.345 as 2.35 and -2.345 as -2.35. `numeric(19,4)`
+      padded 12.3 to 12.3000, which pgjdbc read back unequal to 12.3. An unconstrained
+      `numeric` kept 12.30, and `CHECK (amount = round(amount, 2))` rejected 12.345.
+    - At an overlap, Java takes the earlier offset (02:30+02:00 on 2026-10-25 in Zurich),
+      and Postgres takes the later one (02:30+01), as its docs say. `::date` on a
+      `timestamptz` follows the session's `TimeZone`. pgjdbc returns a `timestamptz` as an
+      `OffsetDateTime` in UTC, and refuses `Instant` both ways.
+    - `@Scheduled` without `zone` resolves in the scheduler clock's zone, which is the JVM's
+      default: one cron fired at 23:30Z on a UTC JVM and at 21:30Z on a Zurich one. A
+      misspelt zone fails at startup. A daily 02:30 Zurich cron skipped 2026-03-29 and ran
+      twice on 2026-10-25. Two application contexts each ran an every-second cron.
+    - Row triggers stopped `UPDATE` and `DELETE` on postings, and `TRUNCATE` went through
+      until a statement trigger was added. A role with only `SELECT` and `INSERT` was
+      refused both. A deferred constraint trigger rejected, at commit, an unbalanced entry
+      and an entry that set CHF against EUR. `ON CONFLICT DO NOTHING` dropped a re-sent
+      line whose amount had changed, and a comparison with `IS DISTINCT FROM` found it.
+    - Identity order is not commit order: ids 8 and 9 committed after a checkpoint at 11.
+      So a checkpoint covers a closed business day, not an id.
+    - The first review found that a closed day had the same race. A posting inserted
+      before the close and committed after it was missing from the checkpoint, with a
+      plain read of the `closed` flag and with a foreign key to the day. With each
+      posting reading the day's row `FOR SHARE`, a close that summed in its own
+      transaction got the posting under `READ COMMITTED` and missed it under
+      `REPEATABLE READ`. A close committed before the sum got it under both, and a later
+      posting to the closed day was refused.
+    - The same review's other probes, each rerun here: `CHECK (amount = round(amount,
+      minor_units))` rejected CHF 12.345 and JPY 12.5 and accepted CHF 12.300 and BHD
+      1.234, which a constant 2 rejected. The owner's `DISABLE TRIGGER` and a superuser's
+      `session_replication_role = replica` both bypassed the append-only trigger, and
+      `ENABLE ALWAYS` stopped the second. Two concurrent check-then-write runs booked
+      twice, and a unique key booked once. `java.util.currency.data` is keyed by
+      country: `UY=UYW,927,4` made `Currency.getInstance("UYU")` throw, and `ZZ=UYW,927,4`
+      added UYW beside UYU. With `USE_BIG_DECIMAL_FOR_FLOATS`, a Jackson 2.22.4
+      `JsonNode` still turned 1234.50 into 1234.5 and 100.00 into 1E+2, and 3.2.4 kept
+      both.
+  - **Every snippet in the skill compiled and ran** on that stack, and each was checked
+    against the skill's own rules: the `Rounding` enum, `MinorUnits.of`, the allocation
+    (100.00 in thirds, 100 JPY, -100.00, 10.01 by 50:30:20, each summing to its total),
+    the cutoff, the Jackson mapper, the JDBC conversions and the SQL triggers. That check
+    corrected four sentences before go-live. The policy table holds the mode, while the
+    operation names the boundary. A checkpoint per account under its lock is safe only in
+    some isolation levels, so it was dropped, and the closed day that replaced it needed
+    a lock of its own, as the first review found. The skill's numbers are not the eval
+    fixture's, but its policy example was the fixture's must-not-flag item: the treatment
+    read a `CLEARING_SETTLEMENT` entry rounding `HALF_UP` under a rulebook's section 7.3.
+    The baseline flagged neither must-not item either, so the result stands, and the
+    example now names a card scheme's fee. The example still shares the operation names
+    `POSTING` and `FX_CONVERSION` and the `INTERMEDIATE` constant with the fixture's
+    policy, since both follow the plan's own list of operations.
+  - **The review eval.** The fixture is a small ledger service that seeds three defects:
+    an FX cross rate divided at the target currency's scale, an 8-decimal price rounded
+    before its multiplication, and an interest posting rounded `HALF_UP` inline against
+    the policy's `HALF_EVEN` for postings. Its `HALF_UP` for the clearing settlement cites
+    a counterparty rulebook, and `Quote` keeps prices at 8 decimals; both must not be
+    flagged. Opus at xhigh ran three reviews per condition. The baseline ran before
+    go-live. One baseline run hit the harness's 600-second step timeout with no answer,
+    so it was rerun at 1,200 seconds, and the treatment ran at 1,200 seconds too. A
+    subagent graded all six blind, given the skill's money and time references:
+    - baseline: 9 of 9 seeded defects found, 74 other useful findings, no false positives;
+    - treatment: 9 of 9, 59 and none.
+
+    No answer flagged either must-not item. The fixture sits at the model's ceiling, as
+    Swift's and Python's did. Two of the baseline runs spawned `code-reviewer` for a second
+    pass, and they scored 27 and 26 useful findings. The third baseline run made one
+    pass, like every treatment run, and scored 21 against the treatment's 21, 17 and 21.
+    Like for like, the skill made no measurable difference to the review here. The
+    treatment loaded the skill in 3 of 3 runs and read two references each time, and no
+    treatment run spawned a reviewer. This grader marked no false positives at all, where
+    Phase 2's graders marked 1 to 9, so it was more lenient. `grading/` in the treatment's
+    directory keeps the packet, the key and the grades.
+  - **Selection, haiku at low effort, three runs per case.** The baseline loaded nothing,
+    since the skill did not exist yet. With the skill live:
+    - negatives, 0 of 3 each: a README task in the ledger fixture, a greeter, a Python fee
+      fix and a React cart total;
+    - positives: a subscription plan in a bare Java repo 3 of 3, an FX conversion plan and
+      a statement import plan in the ledger fixture 1 of 3 each, and a nightly interest job
+      0 of 3.
+
+    The positives miss the plan's default of 2 of 3 in three cases out of four. In the
+    missed runs, haiku explored the fixture with `find` and `grep` and planned from the
+    code. Two wordings were probed and dropped. A description in the siblings' "designing,
+    implementing or reviewing" form scored 1, 0 and 1 of 3 on the same three cases before
+    a network outage failed the rest. Naming the skill in the body's routing line scored 0
+    of 3 on all four positives. The tree went back to the measured configuration.
+    The plan leaves the 2-of-3 threshold to the owner. On 2026-10-23 the owner accepted
+    the result as it is: the skill stays live, and the observation window shows whether
+    real sessions load it. A miss there is diagnosed as broken routing, as the plan's
+    evaluation section prescribes.
+  - **Cost.** $6.01 for the baseline reviews, the timed-out run included, $2.79 for the
+    treatment reviews, and $0.55 for selection and its two probes. The results are in
+    `20261023T155904Z`, `20261023T162820Z` and `20261023T163305Z` for the review,
+    `20261023T155908Z` and `20261023T163309Z` for selection, and `20261023T164407Z` and
+    `20261023T180348Z` for the probes, all `-java-financial-correctness`.
+  - **The harness keeps only the last answer.** A run record's `text` holds the final
+    result event only. A session that answers again after a background subagent finishes
+    loses its first answer there. The grading packet joined every result event from the
+    streams.
+  - **Rejected:**
+    - Reusing the fixture's numbers in the skill: it would teach the treatment the answers.
+    - jOOQ's `INSTANT` forced type in `time.md`: its docs describe it, but no codegen run
+      proved it. The repository converts `OffsetDateTime` instead, which pgjdbc showed.
+    - The Swiss cash-rounding rule for ties: the step and the mode come from the policy.
+
 - **Python is the fourth rule** (2026-10-23, Phase 2 of the language-rules plan). Its body is
   `conventions/python.md`, its stub `rules/python.md`. The observation window starts at this
   change's commit and runs 21 days or 5 sessions in Python repos, whichever is later.

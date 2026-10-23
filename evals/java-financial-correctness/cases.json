@@ -1,0 +1,163 @@
+{
+  "addition": "java-financial-correctness",
+  "description": "The java-financial-correctness skill: a review of seeded money defects graded against the rubric, and selection on prompts that never name the skill. Run 'review' with the daily model and effort, baseline before the skill goes live and treatment after; run the other cases with haiku at low effort, since they measure selection, not judgement. A positive selection case passes when the skill loads in at least 2 of 3 runs, a negative one when it never loads. The ledger fixture seeds three defects: an FX rate divided at the target currency's scale, a price rounded before its multiplication, and a posting rounded HALF_UP against the policy's HALF_EVEN. Its RoundingPolicy's HALF_UP for the clearing settlement is documented and correct, as is Quote's 8-decimal price. A grader subagent sorts each review finding as a must_find hit, another useful finding, or a false positive, and lists each must_find item it missed. Give the grader the skill's money and time references, or the gaps they name read as false positives.",
+  "fixtures": {
+    "ledger": {
+      "README.md": "# Client ledger\n\nBooks client cash movements in a multi-currency ledger: daily interest, monthly custody\nfees, FX conversions, position valuations and the settlement amounts sent to the clearing\ncounterparty.\n\nEvery rounding decision goes through `RoundingPolicy`, which gives each operation its\nmode. FX rates arrive every morning as CHF per unit of each currency, CHF included at 1.\n\n    mvn verify\n",
+      "pom.xml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<project xmlns=\"http://maven.apache.org/POM/4.0.0\"\n         xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n         xsi:schemaLocation=\"http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd\">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>demo</groupId>\n  <artifactId>client-ledger</artifactId>\n  <version>0.4.0</version>\n\n  <properties>\n    <maven.compiler.release>25</maven.compiler.release>\n    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>\n  </properties>\n\n  <dependencies>\n    <dependency>\n      <groupId>org.junit.jupiter</groupId>\n      <artifactId>junit-jupiter</artifactId>\n      <version>6.0.3</version>\n      <scope>test</scope>\n    </dependency>\n  </dependencies>\n</project>\n",
+      "src/main/java/demo/ledger/fees/CustodyFeeCalculator.java": "package demo.ledger.fees;\n\nimport demo.ledger.money.Money;\nimport demo.ledger.money.MoneyOperation;\nimport demo.ledger.money.RoundingPolicy;\nimport java.math.BigDecimal;\n\npublic final class CustodyFeeCalculator {\n\n    private static final BigDecimal ANNUAL_RATE = new BigDecimal(\"0.0075\");\n    private static final BigDecimal MONTHS = BigDecimal.valueOf(12);\n\n    public Money monthlyFee(Money portfolioValue) {\n        BigDecimal fee = portfolioValue.amount().multiply(ANNUAL_RATE).divide(MONTHS, RoundingPolicy.INTERMEDIATE);\n        return RoundingPolicy.round(MoneyOperation.CUSTODY_FEE, fee, portfolioValue.currency());\n    }\n}\n",
+      "src/main/java/demo/ledger/fx/FxConverter.java": "package demo.ledger.fx;\n\nimport demo.ledger.money.Money;\nimport demo.ledger.money.MoneyOperation;\nimport demo.ledger.money.RoundingPolicy;\nimport java.math.BigDecimal;\nimport java.util.Currency;\n\npublic final class FxConverter {\n\n    private final FxRates rates;\n\n    public FxConverter(FxRates rates) {\n        this.rates = rates;\n    }\n\n    public Money convert(Money amount, Currency target) {\n        BigDecimal rate = rates.rate(amount.currency(), target);\n        return RoundingPolicy.round(MoneyOperation.FX_CONVERSION, amount.amount().multiply(rate), target);\n    }\n}\n",
+      "src/main/java/demo/ledger/fx/FxRates.java": "package demo.ledger.fx;\n\nimport java.math.BigDecimal;\nimport java.math.RoundingMode;\nimport java.util.Currency;\nimport java.util.Map;\n\npublic final class FxRates {\n\n    private final Map<Currency, BigDecimal> chfPerUnit;\n\n    public FxRates(Map<Currency, BigDecimal> chfPerUnit) {\n        this.chfPerUnit = Map.copyOf(chfPerUnit);\n    }\n\n    public BigDecimal rate(Currency from, Currency to) {\n        return chfPer(from).divide(chfPer(to), to.getDefaultFractionDigits(), RoundingMode.HALF_EVEN);\n    }\n\n    private BigDecimal chfPer(Currency currency) {\n        BigDecimal rate = chfPerUnit.get(currency);\n        if (rate == null) {\n            throw new IllegalArgumentException(\"no CHF rate for \" + currency);\n        }\n        return rate;\n    }\n}\n",
+      "src/main/java/demo/ledger/money/Money.java": "package demo.ledger.money;\n\nimport java.math.BigDecimal;\nimport java.util.Currency;\nimport java.util.Objects;\n\npublic record Money(BigDecimal amount, Currency currency) {\n\n    public Money {\n        Objects.requireNonNull(amount, \"amount\");\n        Objects.requireNonNull(currency, \"currency\");\n        if (amount.scale() != currency.getDefaultFractionDigits()) {\n            throw new IllegalArgumentException(amount + \" does not carry the minor units of \" + currency);\n        }\n    }\n\n    public Money negate() {\n        return new Money(amount.negate(), currency);\n    }\n}\n",
+      "src/main/java/demo/ledger/money/MoneyOperation.java": "package demo.ledger.money;\n\npublic enum MoneyOperation {\n    POSTING,\n    CUSTODY_FEE,\n    FX_CONVERSION,\n    POSITION_VALUATION,\n    CLEARING_SETTLEMENT\n}\n",
+      "src/main/java/demo/ledger/money/RoundingPolicy.java": "package demo.ledger.money;\n\nimport java.math.BigDecimal;\nimport java.math.MathContext;\nimport java.math.RoundingMode;\nimport java.util.Currency;\nimport java.util.EnumMap;\nimport java.util.Map;\n\npublic final class RoundingPolicy {\n\n    public static final MathContext INTERMEDIATE = MathContext.DECIMAL128;\n\n    private static final Map<MoneyOperation, RoundingMode> MODES = new EnumMap<>(Map.of(\n            MoneyOperation.POSTING, RoundingMode.HALF_EVEN,\n            MoneyOperation.CUSTODY_FEE, RoundingMode.HALF_EVEN,\n            MoneyOperation.FX_CONVERSION, RoundingMode.HALF_EVEN,\n            MoneyOperation.POSITION_VALUATION, RoundingMode.HALF_EVEN,\n            // The clearing counterparty's rulebook (section 7.3) rounds each settlement amount half up.\n            MoneyOperation.CLEARING_SETTLEMENT, RoundingMode.HALF_UP));\n\n    private RoundingPolicy() {\n    }\n\n    public static Money round(MoneyOperation operation, BigDecimal amount, Currency currency) {\n        RoundingMode mode = MODES.get(operation);\n        return new Money(amount.setScale(currency.getDefaultFractionDigits(), mode), currency);\n    }\n}\n",
+      "src/main/java/demo/ledger/posting/BookingDate.java": "package demo.ledger.posting;\n\nimport java.time.Clock;\nimport java.time.LocalDate;\nimport java.time.ZoneId;\n\npublic final class BookingDate {\n\n    public static final ZoneId BOOKING_ZONE = ZoneId.of(\"Europe/Zurich\");\n\n    private BookingDate() {\n    }\n\n    public static LocalDate today(Clock clock) {\n        return LocalDate.now(clock.withZone(BOOKING_ZONE));\n    }\n}\n",
+      "src/main/java/demo/ledger/posting/InterestPosting.java": "package demo.ledger.posting;\n\nimport demo.ledger.money.Money;\nimport demo.ledger.money.RoundingPolicy;\nimport java.math.BigDecimal;\nimport java.math.RoundingMode;\nimport java.time.Clock;\nimport java.util.List;\n\npublic final class InterestPosting {\n\n    static final String INTEREST_EXPENSE_ACCOUNT = \"4100-interest-expense\";\n    private static final BigDecimal DAYS_PER_YEAR = BigDecimal.valueOf(365);\n\n    private final Ledger ledger;\n    private final Clock clock;\n\n    public InterestPosting(Ledger ledger, Clock clock) {\n        this.ledger = ledger;\n        this.clock = clock;\n    }\n\n    public JournalEntry postDailyInterest(String accountId, Money balance, BigDecimal annualRate) {\n        BigDecimal interest = balance.amount().multiply(annualRate).divide(DAYS_PER_YEAR, RoundingPolicy.INTERMEDIATE);\n        Money amount = new Money(\n                interest.setScale(balance.currency().getDefaultFractionDigits(), RoundingMode.HALF_UP),\n                balance.currency());\n        JournalEntry entry = JournalEntry.of(BookingDate.today(clock), List.of(\n                new Posting(INTEREST_EXPENSE_ACCOUNT, amount.negate()),\n                new Posting(accountId, amount)));\n        ledger.book(entry);\n        return entry;\n    }\n}\n",
+      "src/main/java/demo/ledger/posting/JournalEntry.java": "package demo.ledger.posting;\n\nimport java.math.BigDecimal;\nimport java.time.LocalDate;\nimport java.util.Currency;\nimport java.util.HashMap;\nimport java.util.List;\nimport java.util.Map;\nimport java.util.Objects;\nimport java.util.UUID;\n\npublic record JournalEntry(UUID id, LocalDate valueDate, List<Posting> postings) {\n\n    public JournalEntry {\n        Objects.requireNonNull(id, \"id\");\n        Objects.requireNonNull(valueDate, \"valueDate\");\n        postings = List.copyOf(postings);\n        if (postings.size() < 2) {\n            throw new IllegalArgumentException(\"a journal entry needs at least two postings\");\n        }\n        Map<Currency, BigDecimal> totals = new HashMap<>();\n        for (Posting posting : postings) {\n            totals.merge(posting.amount().currency(), posting.amount().amount(), BigDecimal::add);\n        }\n        totals.forEach((currency, total) -> {\n            if (total.signum() != 0) {\n                throw new IllegalArgumentException(\"postings in \" + currency + \" sum to \" + total + \", not zero\");\n            }\n        });\n    }\n\n    public static JournalEntry of(LocalDate valueDate, List<Posting> postings) {\n        return new JournalEntry(UUID.randomUUID(), valueDate, postings);\n    }\n}\n",
+      "src/main/java/demo/ledger/posting/Ledger.java": "package demo.ledger.posting;\n\npublic interface Ledger {\n\n    void book(JournalEntry entry);\n}\n",
+      "src/main/java/demo/ledger/posting/Posting.java": "package demo.ledger.posting;\n\nimport demo.ledger.money.Money;\nimport java.util.Objects;\n\npublic record Posting(String accountId, Money amount) {\n\n    public Posting {\n        Objects.requireNonNull(accountId, \"accountId\");\n        Objects.requireNonNull(amount, \"amount\");\n    }\n}\n",
+      "src/main/java/demo/ledger/settlement/ClearingSettlement.java": "package demo.ledger.settlement;\n\nimport demo.ledger.money.Money;\nimport demo.ledger.money.MoneyOperation;\nimport demo.ledger.money.RoundingPolicy;\nimport demo.ledger.valuation.Quote;\nimport java.math.BigDecimal;\n\npublic final class ClearingSettlement {\n\n    public Money settlementAmount(BigDecimal quantity, Quote quote) {\n        return RoundingPolicy.round(\n                MoneyOperation.CLEARING_SETTLEMENT, quote.price().multiply(quantity), quote.currency());\n    }\n}\n",
+      "src/main/java/demo/ledger/valuation/Position.java": "package demo.ledger.valuation;\n\nimport java.math.BigDecimal;\n\npublic record Position(String accountId, String isin, BigDecimal quantity) {\n}\n",
+      "src/main/java/demo/ledger/valuation/PositionValuation.java": "package demo.ledger.valuation;\n\nimport demo.ledger.money.Money;\nimport demo.ledger.money.MoneyOperation;\nimport demo.ledger.money.RoundingPolicy;\nimport java.math.BigDecimal;\nimport java.math.RoundingMode;\n\npublic final class PositionValuation {\n\n    public Money marketValue(Position position, Quote quote) {\n        if (!position.isin().equals(quote.isin())) {\n            throw new IllegalArgumentException(quote.isin() + \" does not price \" + position.isin());\n        }\n        int minorUnits = quote.currency().getDefaultFractionDigits();\n        BigDecimal unitPrice = quote.price().setScale(minorUnits, RoundingMode.HALF_EVEN);\n        return RoundingPolicy.round(\n                MoneyOperation.POSITION_VALUATION, unitPrice.multiply(position.quantity()), quote.currency());\n    }\n}\n",
+      "src/main/java/demo/ledger/valuation/Quote.java": "package demo.ledger.valuation;\n\nimport java.math.BigDecimal;\nimport java.time.Instant;\nimport java.util.Currency;\nimport java.util.Objects;\n\npublic record Quote(String isin, BigDecimal price, Currency currency, Instant asOf) {\n\n    public static final int PRICE_SCALE = 8;\n\n    public Quote {\n        Objects.requireNonNull(isin, \"isin\");\n        Objects.requireNonNull(price, \"price\");\n        Objects.requireNonNull(currency, \"currency\");\n        Objects.requireNonNull(asOf, \"asOf\");\n        if (price.scale() > PRICE_SCALE) {\n            throw new IllegalArgumentException(isin + \": price \" + price + \" has more than \" + PRICE_SCALE + \" decimals\");\n        }\n        price = price.setScale(PRICE_SCALE);\n    }\n}\n",
+      "src/test/java/demo/ledger/fx/FxConverterTest.java": "package demo.ledger.fx;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport demo.ledger.money.Money;\nimport java.math.BigDecimal;\nimport java.util.Currency;\nimport java.util.Map;\nimport org.junit.jupiter.api.Test;\n\nclass FxConverterTest {\n\n    private static final Currency CHF = Currency.getInstance(\"CHF\");\n    private static final Currency EUR = Currency.getInstance(\"EUR\");\n\n    @Test\n    void convertsEurosToFrancs() {\n        // Arrange\n        FxConverter converter = new FxConverter(new FxRates(Map.of(CHF, BigDecimal.ONE, EUR, new BigDecimal(\"0.95\"))));\n\n        // Act\n        Money converted = converter.convert(new Money(new BigDecimal(\"100.00\"), EUR), CHF);\n\n        // Assert\n        assertEquals(new Money(new BigDecimal(\"95.00\"), CHF), converted);\n    }\n}\n"
+    },
+    "java": {
+      "pom.xml": "<project>\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>demo</groupId>\n  <artifactId>demo</artifactId>\n  <version>1</version>\n</project>\n",
+      "README.md": "# Demo\n\nA greeter.\n",
+      "src/main/java/demo/Greeter.java": "package demo;\n\npublic final class Greeter {\n    public String greet(String name) {\n        return \"Hello \" + name;\n    }\n}\n"
+    },
+    "python-fees": {
+      "pyproject.toml": "[project]\nname = \"fees\"\nversion = \"0.1.0\"\nrequires-python = \">=3.14\"\ndependencies = []\n",
+      "fees.py": "def monthly_fee(balance: float) -> float:\n    return round(balance * 0.0075 / 12, 2)\n"
+    },
+    "react": {
+      "package.json": "{\n  \"name\": \"demo-shop\",\n  \"private\": true,\n  \"dependencies\": { \"next\": \"16.0.0\", \"react\": \"19.0.0\", \"react-dom\": \"19.0.0\" }\n}\n",
+      "app/cart/page.tsx": "const total = \"1234.50\";\n\nexport default function Cart() {\n  return <main>Total: {total} CHF</main>;\n}\n"
+    }
+  },
+  "cases": [
+    {
+      "id": "review",
+      "fixture": "ledger",
+      "steps": [
+        "I'm about to build on this code. Review the Java sources in this repo and list concrete problems by file, most severe first. Don't change any files."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "java"
+        ],
+        "skills_load": [
+          "java-financial-correctness"
+        ]
+      },
+      "rubric": {
+        "must_find": [
+          "FxRates.rate divides with the target currency's minor-unit scale (to.getDefaultFractionDigits()), so every rate is rounded to 2 decimals for CHF or EUR and to 0 for JPY: rate(EUR, CHF) is 0.94 instead of 0.9387, so 100.00 EUR converts to 94.00 CHF instead of 93.87, and rate(JPY, EUR) is 0.01 instead of 0.005646..., so 100,000 JPY converts to 1,000.00 EUR instead of 564.61. A rate keeps its own precision and the division takes a stated MathContext. The test passes only because its rate, 0.95, has two decimals",
+          "PositionValuation.marketValue rounds the 8-decimal price to the currency's minor units before multiplying by the quantity: 10,000 units at 12.34567891 USD are valued 123,500.00 instead of 123,456.79. Multiply first and round the result once, under POSITION_VALUATION",
+          "InterestPosting.postDailyInterest rounds the posted interest with an inline HALF_UP that bypasses RoundingPolicy, whose POSTING mode is HALF_EVEN: on CHF 4,562.50 at 1% the exact daily interest 0.125 posts 0.13 where the policy gives 0.12. Route it through RoundingPolicy.round(POSTING, ...)"
+        ],
+        "must_not_flag": [
+          "RoundingPolicy's HALF_UP for CLEARING_SETTLEMENT, which its comment ties to the clearing counterparty's rulebook (section 7.3), and ClearingSettlement rounding through it",
+          "Quote keeping its price at 8 decimals (PRICE_SCALE), apart from the currency's minor units"
+        ]
+      }
+    },
+    {
+      "id": "fx-conversion-plan",
+      "fixture": "ledger",
+      "steps": [
+        "A client wants their USD balance moved into EUR at today's rate. Before changing anything, reply with a short plan for the conversion, one line per step, including where each value is rounded. Do not change any files."
+      ],
+      "expect": {
+        "skills_load": [
+          "java-financial-correctness"
+        ]
+      }
+    },
+    {
+      "id": "nightly-interest-job",
+      "fixture": "ledger",
+      "steps": [
+        "Add a job that books each account's daily interest every night at 23:30 Zurich time. Reply with the plan first, one line per step, and do not change any files."
+      ],
+      "expect": {
+        "skills_load": [
+          "java-financial-correctness"
+        ]
+      }
+    },
+    {
+      "id": "statement-import",
+      "fixture": "ledger",
+      "steps": [
+        "Every morning the bank sends an end-of-day statement file for our omnibus account. Plan how this service should import it and match its lines against our postings, one line per step. Do not change any files."
+      ],
+      "expect": {
+        "skills_load": [
+          "java-financial-correctness"
+        ]
+      }
+    },
+    {
+      "id": "subscription-billing",
+      "fixture": "java",
+      "steps": [
+        "This service will start charging customers a monthly subscription in CHF, EUR and JPY, prorated by day. Reply with a short plan for how the amounts are computed and stored, one line per step. Do not change any files."
+      ],
+      "expect": {
+        "skills_load": [
+          "java-financial-correctness"
+        ]
+      }
+    },
+    {
+      "id": "ledger-readme",
+      "fixture": "ledger",
+      "steps": [
+        "Add a section to README.md that explains how to run a single test class with Maven. Reply with the plan in one line and do not change any files."
+      ],
+      "expect": {
+        "skills_not_load": [
+          "java-financial-correctness"
+        ]
+      }
+    },
+    {
+      "id": "java-greeter",
+      "fixture": "java",
+      "steps": [
+        "Use the Read tool to read src/main/java/demo/Greeter.java, then reply with a one-line plan for adding a farewell method. Do nothing else."
+      ],
+      "expect": {
+        "skills_not_load": [
+          "java-financial-correctness"
+        ]
+      }
+    },
+    {
+      "id": "python-fee",
+      "fixture": "python-fees",
+      "steps": [
+        "The fee calculation in fees.py uses floats. Reply with a one-line plan to fix it. Do not change any files."
+      ],
+      "expect": {
+        "skills_not_load": [
+          "java-financial-correctness"
+        ]
+      }
+    },
+    {
+      "id": "react-total",
+      "fixture": "react",
+      "steps": [
+        "Show the cart total in app/cart/page.tsx in the user's locale and currency. Reply with a one-line plan, and do not change any files."
+      ],
+      "expect": {
+        "skills_not_load": [
+          "java-financial-correctness"
+        ]
+      }
+    }
+  ]
+}
