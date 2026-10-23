@@ -36,6 +36,7 @@ fixture() {
     java) : >"$2/pom.xml" ;;
     frontend) printf '{"dependencies":{"react":"*"}}\n' >"$2/package.json" ;;
     swift) : >"$2/Package.swift" ;;
+    python) : >"$2/pyproject.toml" ;;
     *) return 1 ;;
   esac
 }

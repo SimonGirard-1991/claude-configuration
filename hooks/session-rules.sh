@@ -8,9 +8,10 @@
 # single-file Bash read, and never checks whether the same text is already in context:
 # with the body in rules/, half the Java sessions held it twice (MAINTAINERS, 2026-10-22).
 #
-# Usage: session-rules.sh <java|frontend|swift>. One rule per invocation, because every hook
-# output field is capped at 10,000 characters and two bodies together exceed it; over the
-# cap Claude receives a file path and a 2,000-character preview instead of the rule.
+# Usage: session-rules.sh <java|frontend|swift|python>. One rule per invocation, because
+# every hook output field is capped at 10,000 characters and two bodies together exceed
+# it; over the cap Claude receives a file path and a 2,000-character preview instead of
+# the rule.
 # hooks/validate-rules.sh blocks a turn that pushes one body past $CAP.
 #
 # Detection probes the session cwd and its git toplevel:
@@ -21,10 +22,12 @@
 #             project.yml: one whose top-level targets: mapping has a target declaring
 #             type: and an Apple platform: or supportedDestinations:. Never in a repo whose
 #             root package.json depends on react-native: its Swift is the native shell.
-# Each marker is checked directly, then one and two directory levels down, and those
-# globs run only strictly under $HOME: never at /, /Users, a mount point or $HOME itself,
-# where a two-level glob can walk a network share and stall the first turn. A marker under
-# node_modules, .build, Pods or DerivedData does not count.
+#   python    pyproject.toml, setup.py, setup.cfg, requirements.txt or uv.lock, at the top
+#             only: a Python tool nested in a Java or React repo is not a Python repo.
+# Each marker is checked directly, then down to the rule's depth: two levels, or none for
+# python. Those globs run only strictly under $HOME: never at /, /Users, a mount point or
+# $HOME itself, where a two-level glob can walk a network share and stall the first turn.
+# A marker under node_modules, .build, Pods or DerivedData does not count.
 #
 # Output is JSON. additionalContext carries one factual header line with a marker,
 # [session-rules <rule> <sha8 of the body>], then the body; the header states a fact rather
@@ -63,8 +66,12 @@ case "$rule" in
     label=Swift depth=2 accept=swift_marker veto=react_native_root
     markers=(Package.swift '*.xcodeproj' '*.xcworkspace' project.yml)
     ;;
+  python)
+    label=Python depth=0 accept=is_file
+    markers=(pyproject.toml setup.py setup.cfg requirements.txt uv.lock)
+    ;;
   *)
-    printf 'session-rules: usage: session-rules.sh <java|frontend|swift>\n' >&2
+    printf 'session-rules: usage: session-rules.sh <java|frontend|swift|python>\n' >&2
     exit 1
     ;;
 esac

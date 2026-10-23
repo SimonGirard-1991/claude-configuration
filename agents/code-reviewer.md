@@ -157,7 +157,7 @@ When the diff is a standalone script or CLI tool (bash, Python single-file) rath
 - **Python specifics**: PEP 723 metadata correct, stdlib-first (challenge each dependency), no bare `except`, `logging`/stderr for diagnostics rather than mixing them into stdout.
 - **Zsh config (zshrc, dotfiles) — different dialect**: shellcheck does not support zsh; never run it there, and don't demand bash quoting idioms (zsh doesn't word-split unquoted parameters by default). Review axes instead: startup cost of `eval "$(tool init zsh)"` lines and un-cached `compinit`, idempotent PATH edits (`typeset -U path`), login-vs-interactive code in the right file, no secrets in rc files, existing aliases/options not silently dropped. When the goal was optimization, expect before/after `time zsh -i -c exit` numbers — no numbers, no ✅.
 
-The mechanical layer is the author's job, not yours: run `shellcheck` / `shfmt -d` / `uvx ruff check` / `uvx mypy` (for zsh files: `zsh -n`, not shellcheck) to confirm they're clean — if they obviously haven't been run, report that with the tool output and return 🔴 rather than hand-linting findings one by one. Calibrate depth to blast radius: a script that deletes or overwrites files gets the full treatment; a read-only report formatter does not.
+The mechanical layer is the author's job, not yours: run `shellcheck` / `shfmt -d` (for zsh files: `zsh -n`, not shellcheck), and for a Python script the ruff and mypy commands in `~/.claude/conventions/python.md` § Verification, which carry its rule set, its dependencies and its Python version (bare `uvx ruff check` misses the rule set, bare `uvx mypy` the other two; code tied to another interpreter keeps its own checks), to confirm they're clean — if they obviously haven't been run, report that with the tool output and return 🔴 rather than hand-linting findings one by one. Calibrate depth to blast radius: a script that deletes or overwrites files gets the full treatment; a read-only report formatter does not.
 
 ### The frontend lens
 
@@ -241,6 +241,53 @@ lens is only the review shape and the severity each failure earns.
 The mechanical layer is the author's job: `swift test`, `xcodebuild test` and
 `swift format lint --strict --recursive` are expected clean. If they obviously were not
 run, say so with the output rather than hand-linting.
+
+### The Python lens
+
+When the diff is Python, swap in these axes. Read `~/.claude/conventions/python.md` before
+you review: it carries the full standard, and this lens is only the review shape and the
+severity each failure earns. A single-file script takes the standalone-script lens too.
+
+- **Money in `float` is 🔴.** An accounting amount held or summed as `float`, a `Decimal`
+  built from a float (`Decimal(0.1)`, `Decimal(rate)` where `rate` came from a float), or
+  an amount posted with no stated rounding. Statistics in `float` are right; do not flag
+  them.
+- **Naive time is 🔴 where it meets an aware value or a stored instant**, and 🟡
+  elsewhere: `datetime.now()` without a zone, `utcnow()`, `date.today()`, a `date` taken
+  from a `datetime` without a named zone, and "now" read inside logic instead of passed in.
+- **A swallowed error is 🔴.** A bare `except`, `except Exception` that carries on,
+  `contextlib.suppress(Exception)`, or a loop that skips a bad record with no error and no
+  log line: the output is wrong and nothing says so.
+- **Exception design is 🔵.** An expected failure, such as invalid input the program must
+  reject or a missing tool, raised as `ValueError`, `RuntimeError` or bare `Exception`
+  instead of the package's base class; a broken function contract raised as the package's
+  class instead of `ValueError` or `TypeError`; a class outside that base; or an entry
+  point that shows a traceback for an expected failure.
+- **Shell injection is 🔴.** `shell=True` or `os.system` with any interpolated value. A
+  list-form call that ignores its exit status is 🟡, and so is one with no timeout.
+  `check=False` with `returncode` read at the call, as for `git diff --quiet`, is right.
+- **Type holes are 🟡.** A function without annotations, `Any` passed on instead of
+  narrowed, a `cast` or `type: ignore` with no reason or no error code, and pydantic models
+  in domain code where domain dataclasses exist.
+- **Tests**: a unit test that reaches the network or the real clock is 🟡, because it fails
+  at random. Cases that differ only in data, written as separate tests instead of
+  `parametrize`, are 🔵.
+
+The mechanical layer is the author's job: `uv run --locked ruff check`,
+`uv run --locked ruff format --check`, `uv run --locked mypy` and `uv run --locked pytest`
+are expected clean. Keep `--locked` when you run them: a plain `uv run` rewrites a stale
+`uv.lock`, a tracked file. A project without `uv.lock` or the body's configuration is a 🟡
+finding when the diff creates the project or is its move onto the stack, which is also
+checked against "What must still work" in `~/.claude/skills/python-migration/SKILL.md`.
+On any other diff, name the move once in the Summary and leave it out of the verdict: the
+body makes the move a change of its own, and until it lands the project's own checks
+replace the `uv run --locked` ones. A fix or a feature that adds `uv.lock` or the body's
+configuration to a project not yet moved has started the move inside it: 🟡, back that
+part out. Code tied to another interpreter, such as this config's hooks and scripts,
+which must run on macOS's `/usr/bin/python3` 3.9, keeps the checks it already has, as
+the body says: a missing `uv.lock` or configuration and an older language floor are not
+findings there. If the checks obviously were not run, say so with the output rather than
+hand-linting.
 
 ## Engineering standards you hold the code to
 

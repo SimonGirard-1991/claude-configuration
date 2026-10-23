@@ -1,0 +1,238 @@
+{
+  "addition": "python-rule",
+  "description": "The Python rule: detection at the repo root only, native loading per fixture, and a review of seeded defects graded against the rubric. Run 'review' with the daily model and effort, baseline before the rule goes live and treatment after; run the other cases with a small model, since they measure loading, not judgement. The nested-python fixture has the shape of a Java and React repo with a Python tool in a subdirectory: its .py loads only the stub. A grader subagent sorts each review finding as a must_find hit, another useful finding, or a false positive, and lists each must_find item it missed. The tool fixture predates the rule: it has no uv.lock, a lax mypy and ruff's defaults. Give the grader the rule's Stack and Verification sections, or the gaps they name read as false positives.",
+  "fixtures": {
+    "tool": {
+      "pyproject.toml": "[project]\nname = \"ledgerkit\"\nversion = \"0.3.0\"\ndescription = \"Turns broker statement PDFs into a monthly balance and fee report.\"\nreadme = \"README.md\"\nrequires-python = \">=3.14\"\ndependencies = [\"pydantic>=2.11\"]\n\n[project.scripts]\nledgerkit = \"ledgerkit.cli:main\"\n\n[dependency-groups]\ndev = [\"mypy>=1.18\", \"pytest>=8.4\", \"ruff>=0.14\"]\n\n[build-system]\nrequires = [\"uv_build>=0.9,<0.14\"]\nbuild-backend = \"uv_build\"\n\n[tool.mypy]\nfiles = [\"src\", \"tests\"]\n",
+      ".python-version": "3.14\n",
+      ".gitignore": "__pycache__/\n*.py[oc]\nbuild/\ndist/\n*.egg-info\n.venv\n",
+      "README.md": "# ledgerkit\n\nTurns a broker statement PDF into a CSV of balances and monthly fees per currency.\n\n    uv run ledgerkit statement.pdf --rates examples/rates.json > report.csv\n\nNeeds poppler's `pdftotext` and `pdfinfo` on PATH. Rates come from a cache file that a\nseparate job refreshes every morning.\n",
+      "examples/rates.json": "{\"fetched_at\": \"2026-10-22T06:00:00+00:00\", \"rates\": {\"CHF\": \"1\", \"EUR\": \"0.9387\", \"USD\": \"0.7962\"}}\n",
+      "src/ledgerkit/__init__.py": "",
+      "src/ledgerkit/models.py": "from dataclasses import dataclass\nfrom datetime import date\nfrom decimal import Decimal\nfrom enum import StrEnum\n\n\nclass Kind(StrEnum):\n    BUY = \"buy\"\n    SELL = \"sell\"\n    DIVIDEND = \"dividend\"\n    FEE = \"fee\"\n\n\n@dataclass(frozen=True, slots=True)\nclass Transaction:\n    booked_on: date\n    kind: Kind\n    amount: Decimal\n    currency: str\n",
+      "src/ledgerkit/extract.py": "import shutil\nimport subprocess\nfrom pathlib import Path\n\n\nclass MissingToolError(Exception):\n    def __init__(self, tool: str) -> None:\n        super().__init__(f\"{tool} is not on PATH; install poppler\")\n\n\ndef _tool(name: str) -> str:\n    exe = shutil.which(name)\n    if exe is None:\n        raise MissingToolError(name)\n    return exe\n\n\ndef pdf_text(path: Path) -> str:\n    result = subprocess.run(\n        f\"pdftotext -layout {path} -\", shell=True, capture_output=True, text=True\n    )\n    return result.stdout\n\n\ndef page_count(path: Path) -> int:\n    result = subprocess.run(\n        [_tool(\"pdfinfo\"), str(path)],\n        check=True,\n        capture_output=True,\n        text=True,\n        timeout=30,\n    )\n    for line in result.stdout.splitlines():\n        if line.startswith(\"Pages:\"):\n            return int(line.split(\":\", 1)[1])\n    raise ValueError(f\"{path}: pdfinfo reported no page count\")\n",
+      "src/ledgerkit/parse.py": "import logging\nfrom datetime import date\nfrom decimal import Decimal\n\nfrom pydantic import BaseModel, ConfigDict\n\nfrom ledgerkit.models import Kind, Transaction\n\nlogger = logging.getLogger(__name__)\n\n\nclass StatementLine(BaseModel):\n    model_config = ConfigDict(frozen=True, extra=\"forbid\")\n\n    booked_on: date\n    kind: Kind\n    amount: str\n    currency: str\n\n\ndef split_line(line: str) -> dict[str, str]:\n    booked_on, kind, amount, currency = line.split()\n    return {\n        \"booked_on\": booked_on,\n        \"kind\": kind.lower(),\n        \"amount\": amount.replace(\"'\", \"\"),\n        \"currency\": currency,\n    }\n\n\ndef parse_transactions(text: str) -> list[Transaction]:\n    transactions = []\n    for line in text.splitlines():\n        if not line.strip() or line.startswith(\"#\"):\n            continue\n        try:\n            raw = StatementLine.model_validate(split_line(line))\n        except:\n            continue\n        transactions.append(\n            Transaction(raw.booked_on, raw.kind, Decimal(raw.amount), raw.currency)\n        )\n    logger.info(\"parsed %d transactions\", len(transactions))\n    return transactions\n",
+      "src/ledgerkit/fees.py": "from decimal import ROUND_HALF_EVEN, Decimal\n\nCENT = Decimal(\"0.01\")\nANNUAL_FEE_RATE = Decimal(0.0075)\nMONTHS = Decimal(12)\n\n\ndef monthly_fee(closing_balance: Decimal) -> Decimal:\n    fee = closing_balance * ANNUAL_FEE_RATE / MONTHS\n    return fee.quantize(CENT, rounding=ROUND_HALF_EVEN)\n",
+      "src/ledgerkit/rates.py": "import json\nfrom datetime import datetime, timedelta\nfrom decimal import Decimal\nfrom pathlib import Path\n\nMAX_AGE = timedelta(hours=24)\n\n\nclass StaleRatesError(Exception):\n    def __init__(self, path: Path, fetched_at: datetime) -> None:\n        super().__init__(f\"{path}: rates fetched at {fetched_at} are older than {MAX_AGE}\")\n\n\ndef is_stale(fetched_at: datetime) -> bool:\n    return datetime.now() - fetched_at > MAX_AGE\n\n\ndef load_rates(path: Path) -> dict[str, Decimal]:\n    data = json.loads(path.read_text(encoding=\"utf-8\"))\n    fetched_at = datetime.fromisoformat(data[\"fetched_at\"])\n    if is_stale(fetched_at):\n        raise StaleRatesError(path, fetched_at)\n    return {currency: Decimal(rate) for currency, rate in data[\"rates\"].items()}\n",
+      "src/ledgerkit/report.py": "from collections import defaultdict\nfrom collections.abc import Iterable\nfrom decimal import Decimal\n\nfrom ledgerkit.models import Kind, Transaction\n\nOUTFLOWS = frozenset({Kind.BUY, Kind.FEE})\n\n\ndef balance_by_currency(transactions: Iterable[Transaction]) -> dict[str, Decimal]:\n    balances: defaultdict[str, Decimal] = defaultdict(Decimal)\n    for transaction in transactions:\n        sign = -1 if transaction.kind in OUTFLOWS else 1\n        balances[transaction.currency] += sign * transaction.amount\n    return dict(balances)\n",
+      "src/ledgerkit/stats.py": "import math\nimport statistics\nfrom collections.abc import Sequence\nfrom itertools import pairwise\n\nTRADING_DAYS = 252\n\n\ndef daily_returns(closes: Sequence[float]) -> list[float]:\n    return [today / yesterday - 1 for yesterday, today in pairwise(closes)]\n\n\ndef annualised_volatility(returns: Sequence[float]) -> float:\n    return statistics.stdev(returns) * math.sqrt(TRADING_DAYS)\n\n\ndef max_drawdown(closes):\n    peak = closes[0]\n    worst = 0.0\n    for close in closes:\n        peak = max(peak, close)\n        worst = min(worst, close / peak - 1)\n    return worst\n",
+      "src/ledgerkit/cli.py": "import argparse\nimport csv\nimport logging\nimport sys\nfrom decimal import ROUND_HALF_EVEN\nfrom pathlib import Path\n\nfrom ledgerkit.extract import pdf_text\nfrom ledgerkit.fees import CENT, monthly_fee\nfrom ledgerkit.parse import parse_transactions\nfrom ledgerkit.rates import load_rates\nfrom ledgerkit.report import balance_by_currency\n\n\ndef main(argv: list[str] | None = None) -> int:\n    parser = argparse.ArgumentParser(\n        prog=\"ledgerkit\", description=\"Balance and fee report from a statement PDF.\"\n    )\n    parser.add_argument(\"statement\", type=Path)\n    parser.add_argument(\"--rates\", type=Path, default=Path(\"rates.json\"))\n    args = parser.parse_args(argv)\n    logging.basicConfig(level=logging.INFO, format=\"%(levelname)s %(name)s: %(message)s\")\n\n    transactions = parse_transactions(pdf_text(args.statement))\n    rates = load_rates(args.rates)\n    writer = csv.writer(sys.stdout)\n    writer.writerow([\"currency\", \"balance\", \"monthly_fee\", \"balance_chf\"])\n    for currency, balance in sorted(balance_by_currency(transactions).items()):\n        in_chf = (balance * rates[currency]).quantize(CENT, rounding=ROUND_HALF_EVEN)\n        writer.writerow([currency, balance, monthly_fee(balance), in_chf])\n    return 0\n",
+      "tests/test_fees.py": "from decimal import Decimal\n\nimport pytest\n\nfrom ledgerkit.fees import monthly_fee\n\n\n@pytest.mark.parametrize(\n    (\"closing_balance\", \"fee\"),\n    [\n        (Decimal(\"120000.00\"), Decimal(\"75.00\")),\n        (Decimal(\"0.00\"), Decimal(\"0.00\")),\n    ],\n)\ndef test_monthly_fee(closing_balance: Decimal, fee: Decimal) -> None:\n    # Act\n    result = monthly_fee(closing_balance)\n\n    # Assert\n    assert result == fee\n",
+      "tests/test_parse.py": "from datetime import date\nfrom decimal import Decimal\n\nfrom ledgerkit.models import Kind, Transaction\nfrom ledgerkit.parse import parse_transactions\n\n\ndef test_parse_transactions_reads_swiss_amounts() -> None:\n    # Arrange\n    text = \"# booked kind amount currency\\n2026-09-30 FEE 1'234.50 CHF\\n\"\n\n    # Act\n    transactions = parse_transactions(text)\n\n    # Assert\n    assert transactions == [\n        Transaction(date(2026, 9, 30), Kind.FEE, Decimal(\"1234.50\"), \"CHF\")\n    ]\n",
+      "tests/test_rates.py": "import json\nfrom datetime import datetime\nfrom decimal import Decimal\nfrom pathlib import Path\n\nfrom ledgerkit.rates import load_rates\n\n\ndef test_load_rates_reads_a_fresh_cache(tmp_path: Path) -> None:\n    # Arrange\n    cache = tmp_path / \"rates.json\"\n    payload = {\"fetched_at\": datetime.now().isoformat(), \"rates\": {\"USD\": \"0.7962\"}}\n    cache.write_text(json.dumps(payload), encoding=\"utf-8\")\n\n    # Act\n    rates = load_rates(cache)\n\n    # Assert\n    assert rates == {\"USD\": Decimal(\"0.7962\")}\n",
+      "tests/test_stats.py": "import pytest\n\nfrom ledgerkit.stats import annualised_volatility, daily_returns\n\n\ndef test_daily_returns() -> None:\n    # Act\n    returns = daily_returns([100.0, 110.0, 99.0])\n\n    # Assert\n    assert returns == pytest.approx([0.10, -0.10])\n\n\ndef test_annualised_volatility_of_a_flat_series_is_zero() -> None:\n    # Act + Assert\n    assert annualised_volatility([0.01, 0.01, 0.01]) == 0.0\n"
+    },
+    "requirements-only": {
+      "requirements.txt": "httpx==0.28.1\n",
+      "fetch_quotes.py": "import sys\n\nimport httpx\n\n\ndef main() -> int:\n    response = httpx.get(sys.argv[1], timeout=10)\n    response.raise_for_status()\n    sys.stdout.write(response.text)\n    return 0\n\n\nif __name__ == \"__main__\":\n    raise SystemExit(main())\n"
+    },
+    "nested-python": {
+      "pom.xml": "<project>\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>demo</groupId>\n  <artifactId>demo</artifactId>\n  <version>1</version>\n</project>\n",
+      "src/main/java/demo/Greeter.java": "package demo;\n\npublic final class Greeter {\n    public String greet(String name) {\n        return \"Hello \" + name;\n    }\n}\n",
+      "frontend/package.json": "{\n  \"name\": \"demo-web\",\n  \"private\": true,\n  \"dependencies\": { \"next\": \"16.0.0\", \"react\": \"19.0.0\", \"react-dom\": \"19.0.0\" }\n}\n",
+      "frontend/app/page.tsx": "export default function Page() {\n  return <main>Hello</main>;\n}\n",
+      "tools/statement-import/requirements.txt": "pdfplumber==0.11.4\n",
+      "tools/statement-import/convert.py": "import csv\nimport sys\nfrom pathlib import Path\n\n\ndef main() -> int:\n    rows = list(csv.reader(Path(sys.argv[1]).read_text(encoding=\"utf-8\").splitlines()))\n    sys.stdout.write(f\"{len(rows)} rows\\n\")\n    return 0\n\n\nif __name__ == \"__main__\":\n    raise SystemExit(main())\n"
+    },
+    "mixed-root": {
+      "pom.xml": "<project>\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>demo</groupId>\n  <artifactId>demo</artifactId>\n  <version>1</version>\n</project>\n",
+      "pyproject.toml": "[project]\nname = \"analysis\"\nversion = \"0.1.0\"\nrequires-python = \">=3.14\"\ndependencies = []\n",
+      "src/main/java/demo/Greeter.java": "package demo;\n\npublic final class Greeter {\n    public String greet(String name) {\n        return \"Hello \" + name;\n    }\n}\n",
+      "analysis/report.py": "from decimal import Decimal\n\n\ndef total(amounts: list[str]) -> Decimal:\n    return sum((Decimal(amount) for amount in amounts), Decimal(0))\n"
+    },
+    "java": {
+      "pom.xml": "<project>\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>demo</groupId>\n  <artifactId>demo</artifactId>\n  <version>1</version>\n</project>\n",
+      "README.md": "# Demo\n\nA greeter.\n",
+      "src/main/java/demo/Greeter.java": "package demo;\n\npublic final class Greeter {\n    public String greet(String name) {\n        return \"Hello \" + name;\n    }\n}\n"
+    },
+    "react": {
+      "package.json": "{\n  \"name\": \"demo-web\",\n  \"private\": true,\n  \"dependencies\": { \"next\": \"16.0.0\", \"react\": \"19.0.0\", \"react-dom\": \"19.0.0\" }\n}\n",
+      "app/page.tsx": "export default function Page() {\n  return <main>Hello</main>;\n}\n",
+      "lib/format.ts": "export function label(name: string): string {\n  return `Hello ${name}`;\n}\n"
+    }
+  },
+  "cases": [
+    {
+      "id": "review",
+      "fixture": "tool",
+      "steps": [
+        "I'm about to build on this code. Review the Python sources in this repo and list concrete problems by file, most severe first. Don't change any files."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "python"
+        ]
+      },
+      "rubric": {
+        "must_find": [
+          "rates.is_stale subtracts the cache's fetched_at, which carries a UTC offset, from the naive datetime.now(), so load_rates raises TypeError on every real cache (examples/rates.json included); the test passes only because it writes a naive timestamp. 'now' must be timezone-aware, ideally passed in",
+          "fees.ANNUAL_FEE_RATE is Decimal(0.0075), built from a float, so it carries binary error: monthly_fee(Decimal('24.00')) returns 0.01, where the exact fee 0.015 rounds half-even to 0.02. Build it from the string '0.0075'",
+          "parse.parse_transactions catches everything with a bare except and continues, so a malformed statement line is dropped without an error or a log line and the balances come out wrong (KeyboardInterrupt is swallowed too)",
+          "extract.pdf_text runs pdftotext through shell=True with the path interpolated into the command string: a path with spaces or shell metacharacters breaks it or runs commands, and with no check=True a failed pdftotext yields empty text that parses to no transactions",
+          "stats.max_drawdown has no type annotations on its parameter or its return, the only unannotated function in the package, so mypy does not check its body"
+        ],
+        "must_not_flag": [
+          "Transaction being a frozen, slotted dataclass with a Decimal amount, and Kind being a StrEnum",
+          "StatementLine being a pydantic model that validates the untrusted statement text at the parsing boundary",
+          "page_count's subprocess call: an executable resolved with shutil.which, an argument list, check=True and a timeout",
+          "Amounts built with Decimal(raw.amount) from validated strings, and quantized with an explicit ROUND_HALF_EVEN",
+          "stats.py computing returns and volatility in float, which suits statistics"
+        ]
+      }
+    },
+    {
+      "id": "py-plan",
+      "fixture": "tool",
+      "steps": [
+        "Without using any tool, reply with a one-line plan for adding a CSV export of the parsed transactions to this tool."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "python"
+        ]
+      }
+    },
+    {
+      "id": "py-crash-read",
+      "fixture": "tool",
+      "steps": [
+        "The tool crashes when it loads the rates cache. Use the Read tool to read src/ledgerkit/rates.py, then reply with one line naming the likely cause. Do nothing else."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "python"
+        ]
+      }
+    },
+    {
+      "id": "py-bash-cat",
+      "fixture": "tool",
+      "steps": [
+        "Run exactly this command with the Bash tool and nothing else: cat src/ledgerkit/fees.py\nThen reply DONE."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "python"
+        ]
+      }
+    },
+    {
+      "id": "requirements-read",
+      "fixture": "requirements-only",
+      "steps": [
+        "Use the Read tool to read fetch_quotes.py. Then reply DONE. Do nothing else."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "python"
+        ]
+      }
+    },
+    {
+      "id": "nested-java-read",
+      "fixture": "nested-python",
+      "steps": [
+        "Use the Read tool to read src/main/java/demo/Greeter.java, then reply with a one-line plan for adding a farewell method. Do nothing else."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "java"
+        ],
+        "rules_not_loaded": [
+          "python"
+        ]
+      }
+    },
+    {
+      "id": "nested-py-read",
+      "fixture": "nested-python",
+      "steps": [
+        "Use the Read tool to read tools/statement-import/convert.py. Then reply DONE. Do nothing else."
+      ],
+      "expect": {
+        "rules_not_loaded": [
+          "python"
+        ]
+      }
+    },
+    {
+      "id": "mixed-read-both",
+      "fixture": "mixed-root",
+      "steps": [
+        "Use the Read tool to read src/main/java/demo/Greeter.java, then use it again to read analysis/report.py. Then reply DONE. Do nothing else."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "java",
+          "python"
+        ]
+      }
+    },
+    {
+      "id": "java-task",
+      "fixture": "java",
+      "steps": [
+        "Use the Read tool to read src/main/java/demo/Greeter.java, then reply with a one-line plan for adding a farewell method. Do nothing else."
+      ],
+      "expect": {
+        "rules_not_loaded": [
+          "python"
+        ]
+      }
+    },
+    {
+      "id": "react-task",
+      "fixture": "react",
+      "steps": [
+        "Use the Read tool to read app/page.tsx, then reply with a one-line plan for adding a loading state. Do nothing else."
+      ],
+      "expect": {
+        "rules_not_loaded": [
+          "python"
+        ]
+      }
+    },
+    {
+      "id": "py-subagent-review",
+      "fixture": "tool",
+      "steps": [
+        "Use the Agent tool with subagent_type code-reviewer. Ask it to review src/ledgerkit/fees.py as if the whole file were new, in at most three bullets. Then reply DONE."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "python"
+        ]
+      }
+    },
+    {
+      "id": "migrate-agreed",
+      "fixture": "tool",
+      "steps": [
+        "I agree: move this project onto the stack my Python conventions describe. Before changing anything, reply with the commits you will make, one line each. Do not change any files."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "python"
+        ],
+        "skills_load": [
+          "python-migration"
+        ]
+      }
+    },
+    {
+      "id": "fix-no-migration",
+      "fixture": "tool",
+      "steps": [
+        "Use the Read tool to read src/ledgerkit/fees.py, then reply with a one-line plan to fix how the fee rate is built. Do nothing else."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "python"
+        ],
+        "skills_not_load": [
+          "python-migration"
+        ]
+      }
+    }
+  ]
+}

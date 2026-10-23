@@ -361,6 +361,17 @@ def test_session_rules() -> None:
     subprocess.run(["git", "init", "-q", str(home / "rn")], check=True)
     put("nmswift/node_modules/pkg/Package.swift")
     put("pods/Pods/Pods.xcodeproj/project.pbxproj")
+    for marker in ("pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "uv.lock"):
+        put(f"py-{marker}/{marker}")
+    put("pysrc/pyproject.toml")
+    put("pysrc/src/pkg/__init__.py")
+    subprocess.run(["git", "init", "-q", str(home / "pysrc")], check=True)
+    put("pynested/tools/pyproject.toml")
+    put("pydir/pyproject.toml/README")
+    put("finance/pom.xml")
+    put("finance/frontend/package.json", pkg({"react": "19"}))
+    put("finance/deploy/relay/requirements.txt")
+    subprocess.run(["git", "init", "-q", str(home / "finance")], check=True)
 
     def session(rule: str, cwd: Path, run_env: dict = env):
         proc = run_hook([SESSION_RULES, rule],
@@ -408,6 +419,24 @@ def test_session_rules() -> None:
         ("swift", Path("/"), False),
         ("java", home / "spm", False),
         ("frontend", home / "rn", False),
+        ("python", home / "py-pyproject.toml", True),
+        ("python", home / "py-setup.py", True),
+        ("python", home / "py-setup.cfg", True),
+        ("python", home / "py-requirements.txt", True),
+        ("python", home / "py-uv.lock", True),
+        ("python", home / "pysrc" / "src" / "pkg", True),
+        ("python", home / "pynested", False),
+        ("python", home / "pydir", False),
+        ("python", home / "finance", False),
+        ("python", home / "finance" / "frontend", False),
+        ("python", home / "finance" / "deploy" / "relay", True),
+        ("python", home / "javarepo", False),
+        ("python", home / "web", False),
+        ("python", home / "spm", False),
+        ("python", home, False),
+        ("python", Path("/"), False),
+        ("java", home / "py-pyproject.toml", False),
+        ("java", home / "finance", True),
     ]
     injected = 0
     for rule, cwd, expect in cases:

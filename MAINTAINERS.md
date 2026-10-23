@@ -42,6 +42,285 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **Python is the fourth rule** (2026-10-23, Phase 2 of the language-rules plan). Its body is
+  `conventions/python.md`, its stub `rules/python.md`. The observation window starts at this
+  change's commit and runs 21 days or 5 sessions in Python repos, whichever is later.
+  - **Detection** looks only at the session's directory and its git toplevel, never below:
+    `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt` or `uv.lock`. A Python tool
+    nested in another repo therefore does not count. Across the owner's repos, the two
+    Python projects match, and PersonalFinance's `deploy/…/requirements.txt` does not. No
+    Java, React or Swift repo has a Python marker at its top. A session started inside the
+    nested tool's own directory does get the body, since that directory is its top.
+  - **Loading, measured on CLI 2.1.309 with haiku at low effort, three runs per case.** The
+    baseline ran before go-live and loaded no Python text anywhere.
+    - Every positive case got the body in 3 of 3 runs, injected before the first file tool:
+      a plan with no tool, a Read, a `cat`, a repo marked only by `requirements.txt`, and a
+      mixed root with `pom.xml` and `pyproject.toml`, which got the Java body too.
+    - Every negative case got no Python body: Java, React, and the PersonalFinance-shaped
+      fixture, where a nested `.py` loaded the 214-character stub alone.
+    - No context held a body twice or two stubs.
+    - A local clone of the owner's Python repo got one injected body, 7,387 characters with
+      its header, and one stub after a Read and an Edit. A clone of PersonalFinance got the
+      Java and React bodies, and only the Python stub when its relay script was read.
+    - The haiku reviewer read the body in 2 of 3 runs. In the third it read the file through
+      `git status && cat -n`, which loads nothing natively, and skipped its lens's read. On
+      the daily model, opus at xhigh, it read the body in 3 of 3 runs, once only through a
+      `grep` for its money rules.
+  - **The review eval.** The fixture seeds five defects: a naive `datetime.now()` that
+    crashes on the cache's aware timestamp, `Decimal(0.0075)`, a bare `except` that drops
+    rows, `shell=True` with an interpolated path, and an unannotated function. Opus at
+    xhigh ran three reviews per condition, and a subagent graded all six blind, with the
+    body's Stack and Verification sections:
+    - baseline: 15 of 15 seeded defects found, 31 other useful findings, 7 false positives;
+    - treatment: 15 of 15, 44 and 9.
+
+    The fixture sits at the model's ceiling, as Swift's did, so "found more often" cannot
+    show. The rule added 8 useful findings about the code (36 against 28) and 5 about
+    tooling (8 against 3), such as the missing `uv.lock`. Three of the treatment's false
+    positives ask for the CHF conversion's rounding to move into a named function, which
+    the body's Money section requires and the grader did not see. Counted against the
+    rule, the treatment has 6 false positives to the baseline's 7. Two more call
+    `page_count`'s `ValueError` a failure that needs its own class, an over-reading of the
+    body's exception-class line. Both conditions shared one false positive three times: a
+    cwd-relative `--rates` default.
+
+    The first round's five results directories hold $7.18 of runs: $4.69 for the two
+    review conditions, $2.03 for three daily-model reviewer runs, and $0.46 for the haiku
+    loading cases. The two clone probes cost $0.02 more. The treatment's `grading/`
+    directory keeps the grader's input, key and grades.
+  - **The hook tests** gained detection rows for each marker, a nested `pyproject.toml`, a
+    directory named `pyproject.toml`, a `src/` subdirectory under a git toplevel, and a
+    PersonalFinance-shaped repo from its root, its frontend and its nested tool. A copy of
+    the hook that detects at depth 2 fails the three nested rows. A copy without the
+    `python` row fails 17: the 16 Python rows, and validate-rules on the live body.
+  - **Also changed.** The reviewer has a Python lens that reads the body. Its script lens
+    sends a Python script to the body's ruff and mypy commands. Bare `uvx ruff check` lacks
+    the rule set, and bare `uvx mypy` lacks the script's dependencies and checks against
+    uvx's own Python: it passed a 3.14 script that imports `cgi`, which 3.13 removed.
+    `CLAUDE.md`'s test markers name pytest and Swift Testing, with `#` comments in Python.
+    The body says that code tied to another interpreter, such as this repo's hooks and
+    scripts on `/usr/bin/python3` 3.9, keeps that floor: the stub's `**/*.py` loads in
+    `~/.claude` too.
+  - **The first review corrected three facts the probes had missed.** pydantic's float path
+    for JSON numbers: the probe used numbers too short to show it. mypy's Python version for
+    a script: the probe script used no new API. And `check=False` is right where the exit
+    status is data. The body and the lens now say each. The second review found the script
+    lens still sending scripts without dependencies to bare `uvx mypy`. The lens's `uv.lock`
+    finding also follows the body's exception for code tied to another interpreter. The
+    review eval ran on the body before these fixes, and none of them touches a seeded
+    defect.
+  - **Revised the same day on the owner's two answers.** Existing projects get no legacy
+    clause, and exception design follows the best practice for a professional project or
+    a published script.
+    - The body no longer says "from scratch". An existing project moves onto the stack in
+      a change of its own, never inside a fix or a feature, and each session in a project
+      not yet moved proposes it once. The end state stays strict. Only the order is set,
+      so a one-line fix does not start a migration nobody asked for.
+    - Until the move, a change follows the code rules the project's Python supports,
+      writes tests for the project's runner, adds dependencies with the project's
+      tooling, and passes the project's own checks. Verification's step 1 names those
+      checks off the stack. The lens says they replace the `uv run --locked` ones, and it
+      rates a fix or a feature that adds `uv.lock` or the body's configuration to an
+      unmoved project 🟡: that change has started the move inside it. A `dev` group alone
+      does not count: in a uv project with a lock and no configuration, a first test's
+      `uv add --dev pytest` adds one, and the body allows that change.
+      - In a project with no lock, `uv run --locked ruff check` exited 1 and created a
+        `.venv`, and its error hint points at `uv lock`, which would start the move inside
+        the fix.
+      - `uv add packaging` in a setuptools project with a `requirements.txt` exited 0. It
+        wrote `uv.lock` and an egg-info, added the dependency to `pyproject.toml` only, and
+        left `requirements.txt` without it.
+      - `python -m unittest discover` ran none of a plain failing `def test_…`: "Ran 0
+        tests", exit 0 and "OK" on 3.9, exit 5 on 3.13. Hence the project's runner.
+    - The script form of `ruff check` was tried as an interim check and dropped. On a
+      test that follows the rule it raised S101, which the project block ignores for
+      `tests/` and the script command does not. With no `requires-python`, it inferred no
+      target and raised UP045, whose `int | None` fix fails at import on 3.9. On legacy
+      files it gave findings with no pass criterion short of cleaning the whole file,
+      which would put behaviour fixes inside the fix.
+    - The move is a series of commits: the project's code renamed under `src/` alone,
+      tooling and lock, the formatter's pass alone, then the fixes, one concern per
+      commit. It lands once the owner agrees and every check passes. Many ruff fixes
+      change behaviour (DTZ, BLE, TRY, B), and one commit for all of them could only be
+      reverted whole. A rename on its own keeps `git log --follow` and blame. A build
+      backend that reads `[project]` may stay. The Python version is the project's own,
+      3.11 at least, and an older one upgrades first, in a change of its own.
+    - The floor of 3.11 is the body's own code. Python 3.11's What's New lists
+      `enum.StrEnum`, `datetime.UTC` and `typing.assert_never` as added there, and Data
+      and Time name all three. The devguide lists 3.10 as end of life since 2026-10-01,
+      and 3.11's end of life is scheduled for 2027-10, so revisit the floor then.
+      - pytest 9 needs 3.10 and would set a lower floor. At `requires-python >=3.9`,
+        `uv add --dev ruff mypy pytest` forked the lock to pytest 8.4.2 and mypy 1.19.1
+        below 3.10. On 3.9, pytest 8.4.2 ignored the body's `[tool.pytest] strict = true`
+        and passed a misspelled marker with a warning, exit 0.
+      - The body's `"pytest>=9"` refused 3.9 instead ("pytest>=9.0.0 depends on
+        Python>=3.10"). On a new 3.15 project it wrote `pytest>=9` with mypy 2.4.0 and
+        ruff 0.17.2.
+    - The lens rates a missing `uv.lock` or configuration 🟡 only on a diff that creates
+      the project or is its move. On any other diff it names the move in its Summary and
+      leaves it out of the verdict, since the self-review loop could otherwise not end
+      without doing the move inside it. Code tied to another interpreter is exempt.
+    - The move's commands were run on scratch projects:
+      - Plain `uv init --package --name feeds` beside an existing `src/feeds/` left the
+        code alone and added a `[project.scripts]` entry for a `main` the code lacked.
+        Over a flat `feeds/`, it added uv's template as a second `src/feeds/__init__.py`:
+        `uv run --locked feeds` printed "Hello from feeds!" and exited 0, and `import feeds`
+        from the project root found the old copy.
+      - `uv init --bare --package` wrote only `pyproject.toml`, with no entry point.
+        `uv sync` then failed on the flat layout ("Expected a Python module at:
+        src/feeds/__init__.py") and passed once the code moved under `src/`.
+        `uv python pin` wrote `.python-version`, which `--bare` leaves out.
+      - `uv add -r requirements.in -c requirements.txt` kept a pip-tools pin at requests
+        2.31.0. `uv add -r` on a fully pinned file, the shape `pip freeze` writes, made
+        all five packages direct `==` dependencies, so a frozen file is a constraint, not
+        a source.
+      - With a `poetry.lock` pinning 2.31.0, `uv sync` installed 2.34.2 and nothing of
+        Poetry's dev group. On a Poetry 1.x file with no `[project]` table, `uv sync`
+        exited 0, locked neither the project nor requests, and `import requests` failed.
+        `uvx migrate-to-uv --keep-current-build-backend` (0.12.0) converted both formats
+        and kept 2.31.0 from the lockfile under a `>=2.31,<3` range. On a pip-tools
+        project that already had an empty `[project]`, it kept `dependencies = []`,
+        deleted both requirements files and exited 0, so the body names it for Poetry
+        only. uv's own migration guides cover pip only.
+    - A copy of the owner's Python project without `uv.lock`, 42 files and 3,554 lines,
+      took `uv add --dev` and the configuration block. Its checks then reported 313 ruff
+      findings, 39 files to reformat and 298 mypy errors, which is why the move is a
+      change of its own.
+    - Exceptions follow PEP 8, which designs hierarchies "based on the distinctions that
+      code catching the exceptions is likely to need": one base per package or script, a
+      subclass only where a caller handles a failure apart, and `ValueError` or
+      `TypeError` for a bad argument, as the built-in exceptions page defines them. Bad
+      data is defined by where it comes from (a file, a process, the network, the user),
+      even when it arrives as an argument, so a parser of user text has one answer. The
+      entry point catches the base with `sys.exit(f"error: {error}")`. The `sys` docs say
+      a string argument is printed to stderr with exit status 1, and the probe printed one
+      line with no traceback. TRY400
+      rejected `logger.error` inside an `except`, `exc_info=False` included, and the
+      reviewer found that ruff's suggested `exc_info=False` with `logger.exception` trips
+      TRY401. The pattern passed the body's ruff, mypy and pytest configuration. TRY003
+      stays ignored for a sharper reason: it wants a class per message. The lens rates
+      exception design 🔵.
+    - The first eval's two "`page_count`'s `ValueError`" false positives now ask for what
+      the rule requires: `pdfinfo` output with no page count is bad data from a process,
+      not a bad argument, so it raises the package's base class.
+    - A second treatment review eval ran on the revised body, before this revision's
+      review fixes, in `20261023T120851Z` for $2.40. A fresh grader scored it blind beside
+      the same three baseline answers, given the revised Stack and Verification sections:
+      - baseline: 15 of 15 seeded defects, 39 other useful findings, 1 false positive;
+      - treatment: 15 of 15, 47 and 8.
+
+      Like for like, the first round's grader gave the same baseline answers 31 and 7, so
+      the grader varies, as Swift's did. The treatment's useful findings are 39 about the
+      code and 8 about tooling, against the baseline's 36 and 3. Six of its 8 false
+      positives ask for what the body requires and the grader did not see: three name
+      `page_count`'s `ValueError`, three the CHF conversion's inline rounding. Counted
+      against the rule, the treatment has 2 false positives to the baseline's 1: an
+      unrounded balance column, and a remark that `ROUND_HALF_EVEN` is unusual, which the
+      rubric lists as must not flag. All three treatment answers asked for a package base
+      exception. The rerun brings this phase's results directories to $9.58.
+  - **Revised a third time, on an outside review the owner accepted.** The move's
+    procedure left the body for the `python-migration` skill. The body keeps the policy:
+    a change of its own, proposed once per project, and a refusal or deferral kept in the
+    project's memory until the project changes materially. The sub-bullets above describe
+    the procedure's content, which now lives in the skill.
+    - The outside review corrected four facts. Each was checked:
+      - TRY003 does not ask for a class per message. ruff's own example passes the value
+        to one class that builds the message. The rule stays off because each raise site
+        states its own message.
+      - Expected failures and contract violations now decide the exception class, not
+        where the data came from.
+      - "Full precision" was false. `Decimal` computes to its context, 28 significant
+        digits by default (`1/3` gave 28 threes), so the body asks for one stated context.
+        The rounding unit follows the currency and the operation: CLDR, through Babel,
+        gives 2 decimals for CHF, 0 for JPY and 3 for BHD.
+      - A script's lockfile does not pin its checkers. `uvx ruff@0.17.2` and
+        `uvx mypy@2.4.0` ran, and the body's script commands now pin both.
+    - Smaller changes:
+      - Structure scales with the change.
+      - Subprocess capture depends on the output.
+      - A domain dataclass is required only where it holds invariants.
+      - `Literal` is allowed for a closed set. mypy named the missing member when a
+        `match` over a `Literal` ended in `assert_never`.
+      - A script whose logic needs tests against its dependencies becomes a project.
+    - The skill's checks were run. With setuptools, a `src/` package that reads a JSON
+      resource built and installed cleanly, then failed with `FileNotFoundError`. Naming
+      the file in `[tool.setuptools.package-data]` fixed it. uv_build shipped the file.
+      `uv export --format requirements.txt --no-dev` wrote the five runtime pins and no
+      pytest, plus an `-e .` line that pip refuses beside hashes; `--no-emit-project`
+      drops it. The CI and Docker lines follow uv's own guides. `uv venv` refuses a
+      directory that already has an environment, so the clean install uses `mktemp -d`.
+    - Selection, haiku at low effort, three runs each (`20261023T140007Z`, $0.05): the
+      skill loaded in 3 of 3 runs once the owner agreed to the move, and in 0 of 3 for a
+      fix in the same unmoved fixture. This phase's results directories now hold $9.63.
+    - The owner capped the review at one pass. It found six 🟡, each reproduced or probed,
+      and all applied without a second review:
+      - `quantize` keeps only the exponent of its unit, so a 0.05 step left 12.33 as is;
+      - the script pins had no stated version source;
+      - a leftover `ruff.toml` turned a failing check into a pass;
+      - `-e .` in the export;
+      - no branch for a `setup.py`-only project;
+      - no branch for a single script with a `requirements.txt`, whose pins survive only
+        when the lock comes before `uv add -c`.
+
+      The remaining 🔵 are listed in the hand-back.
+    - Not taken: putting the calibration tiers first. They sit in the self-review loop
+      text, which stays identical across bodies. The intro's scaling sentence does that
+      job. Narrowing "facts come from documentation" was also not taken, as the owner's
+      principle.
+  - **Facts were fetched and run, 2026-10-23.** Each was checked on a scratch uv project and
+    a PEP 723 script, on CPython 3.15.0:
+    - CPython 3.15.1 is the current stable release (python.org). pydantic 2.14.1 installs
+      on 3.15: its compiled half, pydantic-core 2.50.1, ships cp315 wheels.
+    - uv 0.13.5. `uv init --package` gives a `src/` layout, the `uv_build` backend and
+      `.python-version`. The `dev` group syncs by default. A plain `uv run` rewrote a stale
+      `uv.lock` without saying so, and `uv run --locked` refused it. `uvx mypy` in the
+      project failed to import pydantic. `--with-requirements` takes a PEP 723 script but
+      ignores its lockfile: with pydantic locked at 2.10.5, it installed 2.14.1.
+      `uv sync --locked --script` built the script's own environment at 2.10.5 and refused
+      a stale lockfile, and `uv python find --script` names that environment's
+      interpreter. mypy's `--python-executable` takes only that interpreter's packages:
+      mypy checks against the Python it runs on, and uvx ran it on uv's managed 3.12. A
+      valid 3.14 script failed on `itertools.batched(strict=True)` until
+      `--python-version` named its floor.
+    - ruff 0.17.2. Since 0.16.0 (2026-07-23) the default set has 413 rules, up from 59, and
+      0.17.0 dropped several DTZ rules from it. `select` replaces that set, so the rule
+      uses `extend-select`. S603 flagged every subprocess call, a literal absolute path
+      included, so it is ignored. TRY003 flagged an inline f-string message, and a `msg`
+      variable silenced it, so it is ignored too. S607 flagged a bare executable name, and
+      a `shutil.which` result passed. RUF032 flagged `Decimal(0.0075)` but not a float
+      variable. `contextlib.suppress(Exception)` passed ruff, BLE included, so the rule
+      bans it by name. `except Exception` with `logger.exception` and a non-zero return
+      passed BLE001.
+    - mypy 2.4.0, with `strict = true`, `warn_unreachable` and pydantic's plugin. mypy
+      2.0 turned on `--local-partial-types` and `--strict-bytes` by default, and 2.4 made
+      the native parser the default. `assert_never` named the enum member a `match`
+      missed. An unannotated function failed; a `cast` of `Any` passed, so its reason is a
+      convention no tool checks.
+    - pytest 9.1.1. 9.0 added native TOML under `[tool.pytest]` and `strict = true`, which
+      turns on future strictness options too. The lock pins pytest, so that is safe.
+    - pydantic reads a JSON number into a `Decimal` field through a float:
+      `0.123456789012345678` became `0.12345678901234568`, and `1234.50` became `1234.5`.
+      A JSON string, and `json.loads(…, parse_float=Decimal)` followed by `model_validate`,
+      kept every digit.
+  - **mypy over pyright and ty.** pyright from PyPI runs on Node.js, which it finds or
+    downloads. ty 0.0.91 is in beta and says its diagnostics may change between any two
+    versions. mypy is the reference checker and the one pydantic ships a plugin for.
+    Revisit when ty leaves beta.
+  - **Rejected:**
+    - Detection at depth 2, like the other rules. It would give PersonalFinance the body
+      for one relay script.
+    - `select` with an explicit list. It would drop most of ruff's curated defaults.
+    - A `msg = …` variable before each `raise` to satisfy TRY003.
+    - A legacy clause that keeps an existing project's pip, Poetry or setuptools-only
+      tooling. The owner chose strict.
+    - `logger.error` for an expected failure at the entry point. TRY400 rejects it, and
+      ignoring TRY400 would let any handler drop a traceback.
+    - One exception class per raise site. PEP 8 asks for the distinctions callers need.
+    - A move that lands green behind a baseline (`ruff check --add-noqa`, per-module
+      `ignore_errors` in mypy), as mypy's guide for existing code suggests. It would leave
+      the strict end state as debt in the code. The series of commits reaches it instead.
+    - "No other change lands before the move". It would block a fix the owner wants now.
+
 - **The rule bodies moved to `conventions/`, each `rules/` file is now a stub, and Swift is
   the third rule** (2026-10-22, Phase 1 of the language-rules plan). The Swift rule's
   observation window starts at this change's commit. It runs 21 days or 5 sessions in Swift
