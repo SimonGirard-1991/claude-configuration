@@ -32,7 +32,7 @@ Flyway migrations live in `src/main/resources/db/migration/`. Representative sch
 ```sql
 -- V1__order_schema.sql
 CREATE TABLE orders (
-  id          UUID PRIMARY KEY,
+  id          UUID CONSTRAINT orders_pkey PRIMARY KEY,
   customer_id UUID NOT NULL,
   status      TEXT NOT NULL,
   version     BIGINT NOT NULL DEFAULT 0,   -- optimistic lock cursor
@@ -45,15 +45,16 @@ CREATE TABLE orders (
 -- For query patterns like "orders > 100 EUR", build a dedicated read model rather than
 -- denormalizing into the write table.
 CREATE TABLE order_lines (
-  id          UUID PRIMARY KEY,
-  order_id    UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  id          UUID CONSTRAINT order_lines_pkey PRIMARY KEY,
+  order_id    UUID NOT NULL
+              CONSTRAINT order_lines_order_id_fkey REFERENCES orders(id) ON DELETE CASCADE,
   sku         TEXT NOT NULL,
-  quantity    INT  NOT NULL CHECK (quantity > 0),
+  quantity    INT  NOT NULL CONSTRAINT order_lines_quantity_check CHECK (quantity > 0),
   unit_price  NUMERIC(19, 4) NOT NULL,
   currency    CHAR(3) NOT NULL
 );
 
-CREATE INDEX idx_order_lines_order_id ON order_lines(order_id);
+CREATE INDEX order_lines_order_id_idx ON order_lines(order_id);
 ```
 
 ## Repository implementation
