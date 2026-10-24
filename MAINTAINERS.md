@@ -42,6 +42,210 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **`java-reliability-messaging` gains concurrency control and scheduled jobs**
+  (2026-10-24, Phase 5a of the language-rules plan). Two references went live on
+  2026-10-24: `concurrency-control.md` and `scheduled-jobs.md`. `SKILL.md` routes both from
+  its reference map, its "When to use" list and its review checklist. Its description now
+  also names concurrent writers and scheduled jobs. The Java body's Delegated expertise
+  reads "reliability/messaging (concurrent updates and scheduled jobs included)", and its
+  fourth priority now reads "correct under partial failure and concurrent writers". The
+  observation window starts at this change's commit. It runs 21 days or 5 sessions in Java
+  repos that write a contended row, an update endpoint or a scheduled job, whichever is
+  later.
+  - **What they hold.** Policy and verified facts, not procedures. The headline is
+    conditional. Contention on the row, the transaction's length, a retry's cost, whether a
+    person must see the conflict and the instance count choose the form. A row lock is not
+    wrong in itself, and one instance needs no job lock when a written constraint fixes it.
+    - `concurrency-control.md` covers the choice by conflict, a read-modify-write under
+      each isolation level, row locks and foreign keys, `NOWAIT` and `SKIP LOCKED`, and
+      optimistic locking in jOOQ and Spring Data. It also covers retrying `40001`,
+      `If-Match` with 412 and 428, and advisory locks behind a pool.
+    - `scheduled-jobs.md` covers the instance count, ShedLock, advisory locks and claims,
+      pg_cron, zones (pointing to `time.md`), idempotent chunked runs, missed runs and the
+      last-success alert.
+    - Each reference points to what other skills own and does not restate it: the version
+      column and `ConcurrentAggregateModificationException` (bootstrap), the 409 handler
+      (`rest-adapter.md`, which has no ETag yet), the checkpoint read `FOR SHARE` and
+      `@Scheduled`'s zone (`java-financial-correctness`), DDL locks and Flyway's advisory
+      lock (`java-schema-migrations`), and metric rules (`java-observability`).
+  - **Cost.** The description grew from 569 to 754 characters. A load costs 11,393
+    characters of `SKILL.md`, up from 8,965, plus 15,106 for `concurrency-control.md` or
+    9,932 for `scheduled-jobs.md`. The Java body grew by 75 characters, to 8,787 injected.
+  - **Facts were fetched and run, 2026-10-24.** Context7, keyed, answered for PostgreSQL
+    18, Spring Framework, jOOQ 3.21, Spring Data Relational, Spring Retry, ShedLock,
+    PgBouncer and pg_cron. RFC 9110, RFC 6585, PgBouncer's feature table and Prometheus's
+    instrumentation page came from their sites. The stack was PostgreSQL 18.6, Spring Boot
+    4.1.2 (Spring Framework 7.0.10, Spring Data JDBC 4.1.2, HikariCP 7.0.2, Hibernate
+    Validator 9.1.5), jOOQ 3.21.9, ShedLock 7.10.1, PgBouncer 1.26.1, pg_cron 1.6.8 and JDK
+    25.0.5. Every figure the references cite comes from a script kept in
+    `evals/java-reliability-messaging/probes/`. Each script creates and removes its own
+    containers, runs every client in a container of its own or over a published localhost
+    port, and changes nothing without `--yes`. All are shellcheck and shfmt clean, and each
+    ran once in its final form.
+    - `concurrency.sh` holds the PostgreSQL cases. A parent's `FOR UPDATE` blocked a child
+      insert, while `FOR NO KEY UPDATE` and a non-key `UPDATE` did not, and `pgrowlocks`
+      showed `For Key Share` and `No Key Update`. Under `READ COMMITTED`, a computed write
+      lost an update after waiting, while a conditional decrement, `FOR UPDATE` and `FOR NO
+      KEY UPDATE` gave the right total. Every `REPEATABLE READ` form failed with `40001`,
+      the version check and an `UPDATE ... SKIP LOCKED` claim from an older snapshot
+      included. `SERIALIZABLE` stopped write skew that `REPEATABLE READ` let through. A
+      session advisory lock survived its PgBouncer client and went to the next one.
+    - `pg-cron.sh` holds the pg_cron cases. The default zone is GMT, a run never overlapped
+      the next, the failed runs were readable in `cron.job_run_details`, and runs missed
+      while the server was down were not made up.
+    - `spring-fixture.sh` runs a Maven project in a temporary copy. It holds Spring's
+      translation of `40001`, `40P01` and `55P03` per access path, and `@Retryable` around
+      `@Transactional`, inside a caller's transaction and with a SQLSTATE predicate. It
+      also holds `checkNotModified` on a `PUT`, jOOQ's and Spring Data JDBC's optimistic
+      locking, ShedLock across two contexts, Spring Boot's scheduler with and without
+      virtual threads for cron, fixed-rate and fixed-delay jobs, advisory locks through
+      HikariCP, and the `@Email` length check behind the review eval's false positives.
+    - `fixtures.sh` reproduces the review fixtures' seeded defects and correct code.
+  - **Checking each pattern against the references' own rules changed five things before
+    the treatment:**
+    - A transaction-level advisory lock cannot cover a chunked run, which commits many
+      transactions. The text now holds a session lock on one connection for the run. A
+      probe showed it refusing a second instance while batches ran on other pooled
+      connections.
+    - `outbox.md`'s relay locks its batch with `SELECT ... FOR UPDATE SKIP LOCKED` inside
+      one transaction and does not claim by `UPDATE`, so `scheduled-jobs.md` no longer says
+      it claims. `concurrency-control.md` kept the old sentence until the first review.
+    - The recommended `FOR NO KEY UPDATE` read-modify-write and the `SKIP LOCKED` claim
+      were probed under both levels. The claim fails with `40001` under `REPEATABLE READ`,
+      so the text puts it at `READ COMMITTED` or under the retry.
+    - The retry probe now matches `PessimisticLockingFailureException`, the type the text
+      recommended, and it still retried in a new transaction.
+    - The first jOOQ probe replaced Spring Boot's listener chain, so its "not translated"
+      result proved nothing. Rerun with the chain kept
+      (`DefaultExceptionTranslatorExecuteListener`), `DataChangedException` still reached
+      the caller untranslated.
+  - **The first review found seven 🟡, each probed before the text changed:**
+    - Spring's translation depends on the access path. Through Spring Boot's jOOQ, `55P03`
+      from `NOWAIT` or `lock_timeout` became `CannotAcquireLockException` and `40P01`
+      `DeadlockLoserDataAccessException`. A retry on `PessimisticLockingFailureException`
+      ran a `NOWAIT` read 3 times there, and a `predicate` on `40001` and `40P01` ran it
+      once and still retried a `40001`.
+    - On virtual threads, Spring Boot's `SimpleAsyncTaskScheduler` ran a 2.5 s job due
+      every second up to 3 at once on one instance, where `ThreadPoolTaskScheduler` ran one
+      at a time.
+    - A `@Retryable` inside a caller's transaction ran attempt 2 on the aborted transaction
+      and failed with `25P02`.
+    - The text now says that an advisory lock only stops overlap, that behind PgBouncer
+      only the transaction lock works and a session unlock goes in a `finally`, that the
+      last-success gauge starts at the deploy time and outlives pruning, and that
+      `outbox.md`'s relay locks rather than claims.
+    - Its 🔵 corrected the jOOQ default, whose stale `store()` wrote version 1 again rather
+      than bumping it, and three scripts' nits. Its 🔵 on `If-Match: *` and lists, and on
+      requiring `If-Match` being a breaking change, are left for the owner.
+  - **The second review found one 🟡:** the entry did not say that the eval measured the
+    text before the first review's changes, and the new virtual-thread rule could reach the
+    boxoffice fixture's `must_not_flag` job. The review eval paragraph and the rubric now
+    say why it does not. Its ten 🔵 were wording and were applied: the advisory lock's limit
+    holds at commit or at the unlock, the overlap is stated for the job kinds probed, the
+    deploy time comes from a seeded row, and the translation table, the isolation table's
+    intro and the checklist's lead-in were made exact.
+  - **The third review found one 🟡, and the owner asked for a fourth round:** the second
+    review's narrowing of the overlap rule to a cron job left out fixed-rate jobs. On the
+    virtual-thread scheduler a fixed-rate job overlapped itself like a cron job, 7 runs and
+    up to 3 at once, and a fixed-delay job did not. The rule and the checklist now name
+    cron and fixed-rate jobs, and the probe runs all three kinds under both schedulers. A
+    first run of that probe read a negative counter, because closing a virtual-thread
+    context left runs in flight, so the probe now reads its counts before it drains them.
+    Its 🔵 corrected the boxoffice rubric's reason: the reminder job's mail call has no
+    timeout, so a run is bounded only once it gets one.
+  - **The fourth round found one 🟡, fixed after it, and the owner asked for a fifth
+    round:** the corrected rubric made the boxoffice job one that can outlast its interval,
+    since its mail call has no timeout, so the overlap rule read literally asked for the
+    lock the rubric calls a false positive. The rule and the checklist now count a run with
+    a timeout on each call, and say a run that can hang needs the timeout, not a lock: an
+    advisory lock held by a hung run makes every later run skip, and ShedLock lets the next
+    run in once `lockAtMostFor` has passed. Its 🔵 made the fixed-delay case "with a 1 s
+    delay" and made the probe fail when runs are still in flight after its drain.
+  - **The fifth review found no 🔴 or 🟡.** The overlap rule no longer reaches the boxoffice
+    job, which runs once a day and is bounded once its mail call has a timeout. The new
+    claims rest on kept cases: a held advisory lock refusing other sessions (E2, and the
+    lock held on one pooled connection), and ShedLock's `lockAtMostFor` case. Its 🔵 on this
+    entry, on the scheduler sentence's "there" and on the README's list of the Maven
+    project's tests were applied after its ✅ as wording only. Its 🔵 on fixed-delay jobs
+    sharing one thread on the virtual-thread scheduler, and on a pointer from
+    `java-performance-patterns`' virtual-thread advice, are left for the owner.
+  - **The review eval.** Two fixtures state their context in a README and an ADR.
+    `fixtures.sh` built and ran both before the baseline and reproduced every rubric claim.
+    - The tickets fixture is three instances under `READ COMMITTED`, taking 400 purchases/s
+      on one inventory row at an on-sale. It seeds a read-modify-write lost update on that
+      row: 300 concurrent one-ticket purchases on a 100-seat event all succeeded. It also
+      seeds a `@Scheduled` reminder job with no lock. Its `If-Match` edit, which answers
+      428 and 412 and never retries by its ADR, must not be flagged.
+    - The boxoffice fixture is one instance, fixed by an ADR. The same reminder job must
+      not be flagged there. It seeds a `PUT` that ignores `If-Match` and takes the version
+      from a fresh read, so a stale save and a save without the header both got 200.
+
+    Opus at xhigh ran three reviews per condition and case, as parallel invocations at
+    `--timeout 1200`. One subagent per case graded its six answers blind, shuffled, from
+    every result event of each stream, given both new references,
+    `transactions-and-idempotency.md` and `time.md`:
+    - tickets: baseline 6 of 6 seeded defects, 48 other useful findings, no false positives
+      and no correct item flagged; treatment 6 of 6, 38, none and none;
+    - boxoffice: baseline 3 of 3, 41, one false positive, none flagged; treatment 3 of 3,
+      33, one false positive, none flagged.
+
+    Both cases sit at the model's ceiling, as in Phases 1 to 4, and the references made no
+    measurable difference to what the reviews found. Treatment reviews again listed fewer
+    extra findings. The two false positives, one per condition, both said the customer
+    email had no length limit anywhere. The grader's correction was probed before it was
+    accepted: Hibernate Validator 9.1.5's `@Email` rejected a 65-character local part and a
+    324-character address (`spring-fixture.sh`). As in Phase 4, the references teach every
+    rubric judgement as a general fact: the lost update under `READ COMMITTED`, a version
+    read again in the same request, a job on every instance, and both `must_not_flag`
+    items, since the single-instance constraint and a 412 that is never retried paraphrase
+    the fixtures' ADRs. A later treatment's score on them is not evidence of the
+    references' effect. Two of three treatment tickets reviews read only
+    `scheduled-jobs.md`. The review eval and the selection runs measured the references as
+    they stood before the first review's changes. The virtual-thread rule that review added
+    does not reach the boxoffice reminder job, which runs once a day: a run that hangs on
+    its mail call, which has no timeout, is the missing-timeout finding, not a reason for a
+    lock. The boxoffice rubric's `must_not_flag` now says so.
+  - **Selection, haiku at low effort, three runs per case, one invocation per run.** A
+    positive passes when the skill loads and the right reference is read, checked in each
+    run's stream, in at least 2 of 3 runs.
+    - The baseline loaded the skill in no selection run, since haiku answered every prompt
+      with no tool call.
+    - With the references live, the three negatives stayed at 0 of 3: a README task and a
+      validation change in the tickets fixture, and the greeter. Of the positives, a lost
+      edit in a bare repo scored 2 of 3, three reminder emails after scaling 1 of 3, and an
+      oversold show and a nightly purge on three instances 0 of 3. In the missed runs haiku
+      answered from its own knowledge with no tool call, or grepped the repo and planned
+      from it. When it loaded the skill without a reference, it planned from `SKILL.md`'s
+      checklist.
+    - Two wordings were probed, on all seven cases. The first added a pointer bullet to the
+      Java body's Stack ("load `java-reliability-messaging` before planning, writing or
+      reviewing code where two requests, users or instances can change the same rows or run
+      the same scheduled job, and after a lost update or a job that ran twice"). It scored
+      the lost edit 0, since the skill loaded twice without its reference, the purge 2, and
+      the others 0. The second kept that pointer, led the description with the concurrency
+      triggers and symptoms, and told the reference map to open the reference before
+      planning. It scored the lost edit 3, the purge 1, and the others 0. Neither beat the
+      treatment by more than noise in three runs, so the tree keeps the measured wording,
+      and the second wording's patch is in the treatment's `grading/` directory. The owner
+      decides whether to accept the miss or try a wording.
+  - **Cost.** $9.78 for the baseline reviews, $8.50 for the treatment reviews, $0.27 for
+    selection and $0.28 for the two wordings: $18.83 in all. The results are in
+    `20261024T121823Z` to `20261024T121916Z` for the baseline, `20261024T124906Z` to
+    `20261024T124959Z` for the treatment (graded in `20261024T124906Z`'s `grading/`), and
+    `20261024T130229Z` to `20261024T130433Z` for the two wordings, all
+    `-java-reliability-messaging`.
+  - **Rejected:**
+    - A transaction-level advisory lock for a chunked job: it ends at the first batch's
+      commit.
+    - `ConcurrencyFailureException` as the retry predicate: it includes
+      `OptimisticLockingFailureException`, which may be the user's conflict.
+    - A retry for a conflict on the client's `If-Match` version, as the tickets ADR says.
+    - jOOQ's version field without `executeWithOptimisticLocking`: the stale `store()`
+      overwrote silently.
+    - ShedLock without `usingDbTime()`: a skewed clock took a held lock.
+    - A body pointer or a symptom-led description, for now: neither moved selection past
+      noise, and the pointer costs every Java session 265 characters.
+
 - **`java-schema-migrations` is the Java skill for PostgreSQL schema changes through Flyway**
   (2026-10-23, Phase 4 of the language-rules plan). It went live on 2026-10-23. The Java
   body's Delegated expertise routes "schema migrations" to it, and its Migrations bullet

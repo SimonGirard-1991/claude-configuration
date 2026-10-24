@@ -1,11 +1,13 @@
 ---
 name: java-reliability-messaging
-description: Use when designing or reviewing message-driven or cross-service Java backends — Kafka/RabbitMQ/SQS consumers and producers, retryable HTTP endpoints, cross-aggregate workflows, or anywhere a use case must update a database AND publish an event. Covers transactional boundaries, idempotency keys, the Transactional Outbox pattern, exponential backoff with jitter, Dead Letter Queues, poison-message handling, at-least-once vs exactly-once semantics, and Saga choreography vs orchestration. Skip for throwaway scripts, purely synchronous single-DB CRUD, or non-Java code.
+description: Use when designing or reviewing message-driven or cross-service Java backends — Kafka/RabbitMQ/SQS consumers and producers, retryable HTTP endpoints, cross-aggregate workflows, or anywhere a use case must update a database AND publish an event — and when concurrent requests, users or instances can update the same rows or run the same scheduled job. Covers transactional boundaries, idempotency keys, the Transactional Outbox pattern, exponential backoff with jitter, Dead Letter Queues, poison-message handling, at-least-once vs exactly-once semantics, Saga choreography vs orchestration, lost updates and locking, If-Match/ETag, and scheduled jobs on several instances. Skip for throwaway scripts, single-user CRUD with no messaging, or non-Java code.
 ---
 
 # Java Reliability & Messaging
 
 This skill encodes the rules for making Java backends **reliable under failure** — specifically the class of failures that show up the moment a use case crosses a process boundary (DB + broker, service-to-service, cross-aggregate workflow). These are the bugs that do not appear in a green test suite and only surface under partial failure in production: duplicate charges, lost events, silently dropped messages, poison-pilled partitions, sagas wedged halfway.
+
+The same holds inside one database once two writers meet: concurrent requests that lose each other's updates, and a scheduled job that every instance runs.
 
 Defaults assume Spring Boot + Kafka + a relational DB (Postgres/MySQL) + jOOQ. The principles carry to RabbitMQ, SQS, and Pulsar; the concrete knobs differ. Quarkus and Micronaut ship equivalent primitives.
 
@@ -15,13 +17,15 @@ Defaults assume Spring Boot + Kafka + a relational DB (Postgres/MySQL) + jOOQ. T
 - Adding a retryable HTTP endpoint (webhooks, payment callbacks, anything with a client retry budget).
 - A use case that must update the DB **and** publish an event in the same logical unit of work.
 - Cross-aggregate or cross-service workflow that cannot fit in a single DB transaction (reservation → payment → fulfillment).
-- Reviewing a PR for reliability gaps: missing idempotency, dual writes, unbounded retries, no DLQ, saga with no compensation path.
-- Post-incident: duplicate processing, phantom events, stuck consumer lag, poison messages blocking a partition.
+- Two requests, users or instances can change the same row: a counter or stock level, an edit form, a status transition.
+- A scheduled job in a service that runs, or may run, more than one instance.
+- Reviewing a PR for reliability gaps: missing idempotency, dual writes, unbounded retries, no DLQ, saga with no compensation path, a lost update, a job that runs on every instance.
+- Post-incident: duplicate processing, phantom events, stuck consumer lag, poison messages blocking a partition, changes that vanished, a job that ran twice.
 
 ## When NOT to use
 
 - Throwaway spikes or one-shot scripts.
-- Synchronous single-DB CRUD with no messaging and no external calls.
+- Synchronous single-DB CRUD with no messaging, no external calls, no concurrent writers of the same rows and no scheduled jobs.
 - Internal in-process domain events between modules of a monolith where the listener runs in the **same transaction** as the publisher (a Java record on an in-process event bus suffices — no broker, no outbox).
 - Non-Java code (principles transfer; tooling does not).
 
@@ -48,10 +52,12 @@ review needs its detail.
 | Configure retries, or design a DLQ | `references/retries-and-dlq.md` | Backoff parameters and jitter, Spring Retry for HTTP, Spring Kafka consumer retries, DLQ payload design, retryable vs poison classification |
 | Reason about at-least-once / exactly-once guarantees | `references/delivery-semantics.md` | The three semantics, why Kafka EOS stops at the DB boundary, what to promise a stakeholder |
 | Design a cross-aggregate or cross-service workflow | `references/sagas.md` | Choreography (default) vs orchestration (escalation), mandatory compensations |
+| Keep concurrent writers from losing each other's changes | `references/concurrency-control.md` | Choosing by the conflict, read-modify-write per isolation level, row locks and foreign keys, `NOWAIT` and `SKIP LOCKED`, optimistic locking in jOOQ and Spring Data, retrying `40001`, `If-Match`/`ETag` with 412 and 428, advisory locks behind a pool |
+| Run a scheduled job once when several instances run | `references/scheduled-jobs.md` | When one instance needs no lock, ShedLock's `lockAtMostFor`, `lockAtLeastFor` and database time, advisory locks, claims with `SKIP LOCKED`, pg_cron, idempotent chunked runs, missed runs, the last-success alert |
 
 ## Review checklist
 
-When reviewing a PR involving messaging, cross-service calls, or cross-aggregate workflows, check:
+When reviewing a PR involving messaging, cross-service calls, cross-aggregate workflows, concurrent writers or scheduled jobs, check:
 
 - [ ] **At-least-once actually holds** — two halves of the same concern, check both:
   - [ ] **Idempotency**: every consumer and retryable endpoint has an explicit idempotency strategy (key + table, or natural state check). Not "probably idempotent" — explicitly so.
@@ -66,6 +72,8 @@ When reviewing a PR involving messaging, cross-service calls, or cross-aggregate
 - [ ] **Outbox retention is designed, not deferred**: partitioned + scheduled drop, or an equivalent O(1) cleanup. Cleanup success and table size are metrics with alerts.
 - [ ] **Observability wired**: outbox lag, DLQ depth, retry counts, saga step durations, cleanup freshness. See the `java-observability` skill.
 - [ ] **Replay tooling exists** for the outbox and the DLQs — not a TODO, an actual tool.
+- [ ] **Concurrent writers**: a read-then-write of a contended row uses a conditional `UPDATE`, a row lock or a version check, and an update of a versioned resource requires `If-Match` (428 without it, 412 when stale). Judged by the contention and the stated conflict policy (`references/concurrency-control.md`).
+- [ ] **Scheduled jobs**: with more than one instance, each job runs under a shared lock or claims its items; a single instance relies on a written constraint, and on virtual threads a cron or fixed-rate job whose run, with timeouts on its calls, can outlast its interval takes a lock even there. Each run is idempotent, and its last success has an alert (`references/scheduled-jobs.md`).
 
 ## Anti-patterns to refuse
 
@@ -84,4 +92,6 @@ When reviewing a PR involving messaging, cross-service calls, or cross-aggregate
 - **Transactional boundaries and use-case layering**: `hexagonal-ddd-java` (the use case is the transactional unit because the application layer owns orchestration).
 - **Metrics, traces, and logs for outbox lag, DLQ depth, retry counters, saga state**: `java-observability`.
 - **Testing messaging reliability** (Testcontainers Kafka, consumer idempotency tests, outbox integration tests, saga compensation tests): `java-testing-strategy`.
-- **Scaffolding for outbox tables, retry topologies, and saga state persistence**: `hexagonal-module-bootstrap`.
+- **Scaffolding for outbox tables, retry topologies, and saga state persistence**: `hexagonal-module-bootstrap`. Its `aggregate.md`, `db-adapter-jooq.md` and `db-adapter-jpa.md` hold the version column and `ConcurrentAggregateModificationException`.
+- **Business dates, cutoffs and a scheduled business job's zone**: `java-financial-correctness`.
+- **Lock levels of DDL, `lock_timeout` for migrations, and Flyway's advisory lock**: `java-schema-migrations`.

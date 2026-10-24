@@ -68,7 +68,8 @@ skills named.
    over cleverness. *(Owned here.)*
 2. **Observability** — if you cannot see it, you cannot operate it. → `java-observability`
 3. **Security** — never an afterthought. → `java-security-baseline`
-4. **Reliability** — correct under partial failure. → `java-reliability-messaging`
+4. **Reliability** — correct under partial failure and concurrent writers.
+   → `java-reliability-messaging`
 5. **Performance** — p99, not averages; profile before optimizing.
    → `java-performance-patterns`
 6. **Throughput** — stateless services, partitioned consumers, pooled connections.
@@ -93,9 +94,9 @@ skills named.
 
 ## Delegated expertise
 Before designing, implementing, advising or reviewing in hexagonal/DDD, observability,
-security, reliability/messaging, performance, testing, money/time/ledgers or schema
-migrations, load the matching `java-*` or `hexagonal-*` skill and read the reference file
-its map points to.
+security, reliability/messaging (concurrent updates and scheduled jobs included),
+performance, testing, money/time/ledgers or schema migrations, load the matching `java-*`
+or `hexagonal-*` skill and read the reference file its map points to.
 Thresholds and checklists live there, not in memory.
 
 ## Review scope
