@@ -1143,17 +1143,17 @@ says explicitly that the external reviewer was skipped — no retry loop.
   subagent transcripts carry it, 140 of them code-reviewer's). The transcripts agree:
   - **First seen** on 2026-09-22, CLI 2.1.280, in a work repo.
   - **Loaded:** all 123 PersonalFinance sessions that record their instruction files (7
-    record none), and sessions in MineSweeper, Tetris, a Java demo and two work
-    repos, none of which has a `CLAUDE.md`.
-  - **Not loaded:** Wealthpay, Pictures and uigen, which have one, and sessions started in
-    `$TMPDIR`.
+    record none), and sessions in MineSweeper, Tetris, a Java demo and two work repos,
+    none of which has a `CLAUDE.md`.
+  - **Not loaded:** Pictures, uigen and a third project, which have one, and sessions
+    started in `$TMPDIR`.
 
   The decision log had grown the file to 37 KB, 13.2k tokens by `/context` on 2026-10-09,
   about a sixth of a PersonalFinance session's first-turn input (75.5k–78.5k). Three
   things kept it unseen:
   - **The 09-24 check** was a `/context` run in `~/.claude`. From the first load on 09-22
-    to 09-27, every `/context` run outside `~/.claude` was in Pictures or Wealthpay, which
-    have a `CLAUDE.md` and so never load it.
+    to 09-27, every `/context` run outside `~/.claude` was in Pictures or that third
+    project, which have a `CLAUDE.md` and so never load it.
   - **From 09-28 it was listed, not hidden:** `/context` in Tetris (09-28) and
     PersonalFinance (09-29, 10-04, 10-09) showed it as a Project file at 8.4k–13.2k tokens,
     and nobody read the row against this file's first paragraph.

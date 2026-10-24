@@ -12,7 +12,7 @@ order/infrastructure/db/
     └── OrderRowWriter.java          (domain Order → jOOQ insert/update fields)
 ```
 
-jOOQ-generated classes live under `src/main/generated-jooq/` and are committed to git (same as Wealthpay's convention).
+jOOQ-generated classes live under `src/main/generated-jooq/` and are committed to git.
 
 ---
 
