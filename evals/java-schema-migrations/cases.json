@@ -1,0 +1,190 @@
+{
+  "addition": "java-schema-migrations",
+  "description": "The java-schema-migrations skill: two reviews of seeded migration defects, each judged on the context its fixture states, graded against the rubric, and selection on prompts that never name the skill. Run 'review-hot' and 'review-small' with the daily model and effort and --timeout 1200, baseline before the skill goes live and treatment after; run the other cases with haiku at low effort, since they measure selection, not judgement. A positive selection case passes when the skill loads in at least 2 of 3 runs, a negative one when it never loads. The payments fixture is a hot table under zero-downtime deploys: it seeds a plain CREATE INDEX, a direct SET NOT NULL and a concurrent index build under Flyway's default transactional lock, and its direct CHECK on a 180-row table is correct. The costs fixture is a small table in a single-instance service released in a maintenance window: its plain index and direct SET NOT NULL are correct there, and it seeds a serial key whose sequence the application role cannot use. A grader subagent sorts each review finding as a must_find hit, another useful finding, or a false positive, and lists each must_find item it missed. Give the grader the skill's references, or the gaps they name read as false positives. Build the grading packet from every result event of each run's stream, not from run.json's text, which keeps only the last one.",
+  "fixtures": {
+    "payments": {
+      "README.md": "# payments-api\n\nCard payment authorisations for merchants: the API that acquirers and the merchant\ndashboard call.\n\n## How it runs\n\n- Six instances behind the load balancer. Deploys are rolling, several times a week,\n  and there is no maintenance window (see `docs/adr/0003-zero-downtime-deploys.md`).\n- Flyway runs at application startup on the first new instance, while the instances\n  of the previous release keep serving traffic.\n- Availability target: 99.95% per month. A write to `payments` that waits more than\n  two seconds fails the authorisation and counts against it.\n\n## Data\n\n| Table | Rows | Writes at peak |\n|---|---|---|\n| `payments` | about 420 million, 180 GB with indexes | 1,800 inserts/s and 700 updates/s |\n| `merchants` | 38,000 | a few per minute |\n| `currencies` | 180 | a few per year |\n\n`payments.channel` was added nullable in V4 (release 2026.08). Every release since then\nwrites it on insert, and the backfill job for older rows finished on 2026-10-02.\n\n## Build\n\n    mvn verify\n",
+      "docs/adr/0003-zero-downtime-deploys.md": "# ADR 0003: Zero-downtime deploys\n\nStatus: Accepted, 2026-03-12\n\n## Context\n\nAcquirers retry a failed authorisation once, then decline the card. A planned outage\ntherefore declines real purchases, and the acquirer contracts allow none.\n\n## Decision\n\n- Every release deploys as a rolling update, one instance at a time, with no\n  maintenance window.\n- Two releases run side by side during a deploy, so each migration must work with the\n  code of the release before it.\n- Flyway runs at startup. `afterConnect.sql` sets a 1-second `lock_timeout` on Flyway's\n  connections, so a migration that cannot get its lock fails the deploy instead of\n  queueing traffic behind it.\n\n## Consequences\n\nA migration that holds a lock on `payments` for more than two seconds is an incident.\n",
+      "pom.xml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<project xmlns=\"http://maven.apache.org/POM/4.0.0\"\n         xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n         xsi:schemaLocation=\"http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd\">\n  <modelVersion>4.0.0</modelVersion>\n  <parent>\n    <groupId>org.springframework.boot</groupId>\n    <artifactId>spring-boot-starter-parent</artifactId>\n    <version>4.1.2</version>\n    <relativePath/>\n  </parent>\n  <groupId>demo</groupId>\n  <artifactId>payments-api</artifactId>\n  <version>2026.11.0</version>\n\n  <properties>\n    <java.version>25</java.version>\n  </properties>\n\n  <dependencies>\n    <dependency>\n      <groupId>org.springframework.boot</groupId>\n      <artifactId>spring-boot-starter-web</artifactId>\n    </dependency>\n    <dependency>\n      <groupId>org.springframework.boot</groupId>\n      <artifactId>spring-boot-starter-jdbc</artifactId>\n    </dependency>\n    <dependency>\n      <groupId>org.springframework.boot</groupId>\n      <artifactId>spring-boot-starter-flyway</artifactId>\n    </dependency>\n    <dependency>\n      <groupId>org.flywaydb</groupId>\n      <artifactId>flyway-database-postgresql</artifactId>\n    </dependency>\n    <dependency>\n      <groupId>org.postgresql</groupId>\n      <artifactId>postgresql</artifactId>\n      <scope>runtime</scope>\n    </dependency>\n  </dependencies>\n</project>\n",
+      "src/main/java/demo/payments/Channel.java": "package demo.payments;\n\npublic enum Channel {\n    ECOM, POS, MOTO\n}\n",
+      "src/main/java/demo/payments/MerchantPaymentsQuery.java": "package demo.payments;\n\nimport java.time.Instant;\nimport java.time.ZoneOffset;\nimport java.util.List;\nimport org.springframework.jdbc.core.simple.JdbcClient;\nimport org.springframework.stereotype.Repository;\n\n@Repository\npublic class MerchantPaymentsQuery {\n\n    private final JdbcClient jdbc;\n\n    public MerchantPaymentsQuery(JdbcClient jdbc) {\n        this.jdbc = jdbc;\n    }\n\n    public List<PaymentSummary> recent(long merchantId, Instant since, int limit) {\n        return jdbc.sql(\"\"\"\n                SELECT id, reference, amount, currency, status, channel, created_at\n                FROM payments\n                WHERE merchant_id = :merchantId AND created_at >= :since\n                ORDER BY created_at DESC\n                LIMIT :limit\"\"\")\n                .param(\"merchantId\", merchantId)\n                .param(\"since\", since.atOffset(ZoneOffset.UTC))\n                .param(\"limit\", limit)\n                .query(PaymentSummary.class)\n                .list();\n    }\n}\n",
+      "src/main/java/demo/payments/PaymentSummary.java": "package demo.payments;\n\nimport java.math.BigDecimal;\nimport java.time.OffsetDateTime;\n\npublic record PaymentSummary(\n        long id, String reference, BigDecimal amount, String currency, String status, String channel,\n        OffsetDateTime createdAt) {\n}\n",
+      "src/main/java/demo/payments/PaymentWriter.java": "package demo.payments;\n\nimport java.math.BigDecimal;\nimport java.util.Optional;\nimport org.springframework.jdbc.core.simple.JdbcClient;\nimport org.springframework.stereotype.Repository;\n\n@Repository\npublic class PaymentWriter {\n\n    private final JdbcClient jdbc;\n\n    public PaymentWriter(JdbcClient jdbc) {\n        this.jdbc = jdbc;\n    }\n\n    public Optional<Long> authorise(long merchantId, String reference, BigDecimal amount, String currency, Channel channel) {\n        return jdbc.sql(\"\"\"\n                INSERT INTO payments (merchant_id, reference, amount, currency, status, channel)\n                VALUES (:merchantId, :reference, :amount, :currency, 'AUTHORISED', :channel)\n                ON CONFLICT (merchant_id, reference) DO NOTHING\n                RETURNING id\"\"\")\n                .param(\"merchantId\", merchantId)\n                .param(\"reference\", reference)\n                .param(\"amount\", amount)\n                .param(\"currency\", currency)\n                .param(\"channel\", channel.name())\n                .query(Long.class)\n                .optional();\n    }\n}\n",
+      "src/main/resources/application.yml": "spring:\n  datasource:\n    url: ${PAYMENTS_DB_URL}\n    username: ${PAYMENTS_DB_USER}\n    password: ${PAYMENTS_DB_PASSWORD}\n    hikari:\n      maximum-pool-size: 20\n  flyway:\n    locations: classpath:db/migration\n",
+      "src/main/resources/db/migration/V10__currencies_minor_units_check.sql": "ALTER TABLE currencies ADD CONSTRAINT currencies_minor_units_check CHECK (minor_units BETWEEN 0 AND 4);\n",
+      "src/main/resources/db/migration/V1__merchants.sql": "CREATE TABLE merchants (\n  id         bigint GENERATED ALWAYS AS IDENTITY,\n  name       text NOT NULL,\n  created_at timestamptz NOT NULL DEFAULT now(),\n  CONSTRAINT merchants_pkey PRIMARY KEY (id)\n);\n",
+      "src/main/resources/db/migration/V2__payments.sql": "CREATE TABLE payments (\n  id          bigint GENERATED ALWAYS AS IDENTITY,\n  merchant_id bigint NOT NULL,\n  reference   text NOT NULL,\n  amount      numeric(19, 4) NOT NULL,\n  currency    text NOT NULL,\n  status      text NOT NULL,\n  created_at  timestamptz NOT NULL DEFAULT now(),\n  CONSTRAINT payments_pkey PRIMARY KEY (id),\n  CONSTRAINT payments_merchant_id_fkey FOREIGN KEY (merchant_id) REFERENCES merchants (id),\n  CONSTRAINT payments_status_check CHECK (status IN ('AUTHORISED', 'CAPTURED', 'DECLINED', 'REFUNDED'))\n);\n",
+      "src/main/resources/db/migration/V3__payments_created_at_index.sql": "CREATE INDEX payments_created_at_idx ON payments (created_at);\n",
+      "src/main/resources/db/migration/V4__payments_channel.sql": "ALTER TABLE payments ADD COLUMN channel text;\n",
+      "src/main/resources/db/migration/V5__currencies.sql": "CREATE TABLE currencies (\n  code        text NOT NULL,\n  minor_units integer NOT NULL,\n  CONSTRAINT currencies_pkey PRIMARY KEY (code)\n);\n\nINSERT INTO currencies (code, minor_units) VALUES ('CHF', 2), ('EUR', 2), ('JPY', 0), ('BHD', 3), ('USD', 2);\n",
+      "src/main/resources/db/migration/V6__payments_channel_check.sql": "ALTER TABLE payments ADD CONSTRAINT payments_channel_check CHECK (channel IN ('ECOM', 'POS', 'MOTO')) NOT VALID;\n",
+      "src/main/resources/db/migration/V7__payments_merchant_id_created_at_index.sql": "CREATE INDEX payments_merchant_id_created_at_idx ON payments (merchant_id, created_at);\n",
+      "src/main/resources/db/migration/V8__payments_channel_not_null.sql": "ALTER TABLE payments ALTER COLUMN channel SET NOT NULL;\n",
+      "src/main/resources/db/migration/V9__payments_merchant_id_reference_key.sql": "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS payments_merchant_id_reference_key ON payments (merchant_id, reference);\n",
+      "src/main/resources/db/migration/afterConnect.sql": "SET lock_timeout = '1s';\n"
+    },
+    "costs": {
+      "README.md": "# cost-centres\n\nThe finance team's back-office tool for cost centres, their owners and yearly budgets.\n\n## How it runs\n\n- One instance on one VM, with one PostgreSQL database.\n- Releases go out in the Sunday maintenance window, 06:00 to 08:00, with the\n  application stopped (see `docs/adr/0002-maintenance-window.md`). Flyway runs when the\n  new version starts, before anyone can use it.\n- Availability target: business hours, Monday to Friday. Nobody uses it at weekends.\n\n## Data\n\n| Table | Rows | Writes |\n|---|---|---|\n| `cost_centers` | about 3,200 | a few dozen a day |\n| `owners` | about 400 | a few a week |\n\n`cost_centers.region` was added nullable in V5 and backfilled in V6, and the\napplication has set it on every insert since that release.\n\n## Database roles\n\nFlyway connects as `costs_owner`, which owns every table. The application connects as\n`costs_app`, which gets data privileges only, from V1.\n\n## Build\n\n    mvn verify\n",
+      "docs/adr/0002-maintenance-window.md": "# ADR 0002: Releases in the Sunday maintenance window\n\nStatus: Accepted, 2025-11-04\n\n## Context\n\nThe finance team uses the tool during office hours only. A single instance is enough for\nits load, and a second one would only add operational cost.\n\n## Decision\n\nReleases are deployed on Sundays between 06:00 and 08:00. The application is stopped,\nthe new version starts and runs its Flyway migrations, and the team checks it before\n08:00.\n\n## Consequences\n\nA migration may lock a table for the length of the window. Rolling deploys and online\nschema changes are not needed while this ADR stands.\n",
+      "pom.xml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<project xmlns=\"http://maven.apache.org/POM/4.0.0\"\n         xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n         xsi:schemaLocation=\"http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd\">\n  <modelVersion>4.0.0</modelVersion>\n  <parent>\n    <groupId>org.springframework.boot</groupId>\n    <artifactId>spring-boot-starter-parent</artifactId>\n    <version>4.1.2</version>\n    <relativePath/>\n  </parent>\n  <groupId>demo</groupId>\n  <artifactId>cost-centres</artifactId>\n  <version>1.9.0</version>\n\n  <properties>\n    <java.version>25</java.version>\n  </properties>\n\n  <dependencies>\n    <dependency>\n      <groupId>org.springframework.boot</groupId>\n      <artifactId>spring-boot-starter-web</artifactId>\n    </dependency>\n    <dependency>\n      <groupId>org.springframework.boot</groupId>\n      <artifactId>spring-boot-starter-jdbc</artifactId>\n    </dependency>\n    <dependency>\n      <groupId>org.springframework.boot</groupId>\n      <artifactId>spring-boot-starter-flyway</artifactId>\n    </dependency>\n    <dependency>\n      <groupId>org.flywaydb</groupId>\n      <artifactId>flyway-database-postgresql</artifactId>\n    </dependency>\n    <dependency>\n      <groupId>org.postgresql</groupId>\n      <artifactId>postgresql</artifactId>\n      <scope>runtime</scope>\n    </dependency>\n  </dependencies>\n</project>\n",
+      "src/main/java/demo/costs/BudgetLineRepository.java": "package demo.costs;\n\nimport java.math.BigDecimal;\nimport org.springframework.jdbc.core.simple.JdbcClient;\nimport org.springframework.stereotype.Repository;\n\n@Repository\npublic class BudgetLineRepository {\n\n    private final JdbcClient jdbc;\n\n    public BudgetLineRepository(JdbcClient jdbc) {\n        this.jdbc = jdbc;\n    }\n\n    public int add(long costCenterId, int fiscalYear, BigDecimal amount) {\n        return jdbc.sql(\"\"\"\n                INSERT INTO budget_lines (cost_center_id, fiscal_year, amount)\n                VALUES (:costCenterId, :fiscalYear, :amount)\n                RETURNING id\"\"\")\n                .param(\"costCenterId\", costCenterId)\n                .param(\"fiscalYear\", fiscalYear)\n                .param(\"amount\", amount)\n                .query(Integer.class)\n                .single();\n    }\n}\n",
+      "src/main/java/demo/costs/CostCenter.java": "package demo.costs;\n\npublic record CostCenter(long id, String code, String name, String region) {\n}\n",
+      "src/main/java/demo/costs/CostCenterQuery.java": "package demo.costs;\n\nimport java.util.List;\nimport org.springframework.jdbc.core.simple.JdbcClient;\nimport org.springframework.stereotype.Repository;\n\n@Repository\npublic class CostCenterQuery {\n\n    private final JdbcClient jdbc;\n\n    public CostCenterQuery(JdbcClient jdbc) {\n        this.jdbc = jdbc;\n    }\n\n    public List<CostCenter> ownedBy(long ownerId) {\n        return jdbc.sql(\"SELECT id, code, name, region FROM cost_centers WHERE owner_id = :ownerId ORDER BY code\")\n                .param(\"ownerId\", ownerId)\n                .query(CostCenter.class)\n                .list();\n    }\n}\n",
+      "src/main/resources/application.yml": "spring:\n  datasource:\n    url: ${COSTS_DB_URL}\n    username: costs_app\n    password: ${COSTS_APP_PASSWORD}\n  flyway:\n    user: costs_owner\n    password: ${COSTS_OWNER_PASSWORD}\n    locations: classpath:db/migration\n",
+      "src/main/resources/db/migration/V1__roles_and_privileges.sql": "GRANT USAGE ON SCHEMA public TO costs_app;\nALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO costs_app;\n",
+      "src/main/resources/db/migration/V2__owners.sql": "CREATE TABLE owners (\n  id    bigint GENERATED ALWAYS AS IDENTITY,\n  email text NOT NULL,\n  name  text NOT NULL,\n  CONSTRAINT owners_pkey PRIMARY KEY (id),\n  CONSTRAINT owners_email_key UNIQUE (email)\n);\n",
+      "src/main/resources/db/migration/V3__cost_centers.sql": "CREATE TABLE cost_centers (\n  id       bigint GENERATED ALWAYS AS IDENTITY,\n  code     text NOT NULL,\n  name     text NOT NULL,\n  owner_id bigint NOT NULL,\n  CONSTRAINT cost_centers_pkey PRIMARY KEY (id),\n  CONSTRAINT cost_centers_code_key UNIQUE (code),\n  CONSTRAINT cost_centers_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES owners (id)\n);\n",
+      "src/main/resources/db/migration/V4__cost_centers_code_check.sql": "ALTER TABLE cost_centers ADD CONSTRAINT cost_centers_code_check CHECK (code ~ '^[A-Z]{2}[0-9]{4}$');\n",
+      "src/main/resources/db/migration/V5__cost_centers_region.sql": "ALTER TABLE cost_centers ADD COLUMN region text;\n",
+      "src/main/resources/db/migration/V6__cost_centers_region_backfill.sql": "UPDATE cost_centers SET region = left(code, 2) WHERE region IS NULL;\n",
+      "src/main/resources/db/migration/V7__cost_centers_owner_id_index.sql": "CREATE INDEX cost_centers_owner_id_idx ON cost_centers (owner_id);\n",
+      "src/main/resources/db/migration/V8__cost_centers_region_not_null.sql": "ALTER TABLE cost_centers ALTER COLUMN region SET NOT NULL;\n",
+      "src/main/resources/db/migration/V9__budget_lines.sql": "CREATE TABLE budget_lines (\n  id             serial,\n  cost_center_id bigint NOT NULL,\n  fiscal_year    integer NOT NULL,\n  amount         numeric(14, 2) NOT NULL,\n  CONSTRAINT budget_lines_pkey PRIMARY KEY (id),\n  CONSTRAINT budget_lines_cost_center_id_fkey FOREIGN KEY (cost_center_id) REFERENCES cost_centers (id),\n  CONSTRAINT budget_lines_cost_center_id_fiscal_year_key UNIQUE (cost_center_id, fiscal_year)\n);\n"
+    },
+    "bare-flyway": {
+      "README.md": "# Orders\n\nThe order service.\n",
+      "pom.xml": "<project>\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>demo</groupId>\n  <artifactId>orders</artifactId>\n  <version>1</version>\n  <dependencies>\n    <dependency>\n      <groupId>org.flywaydb</groupId>\n      <artifactId>flyway-database-postgresql</artifactId>\n      <version>13.11.1</version>\n    </dependency>\n  </dependencies>\n</project>\n",
+      "src/main/resources/db/migration/V1__orders.sql": "CREATE TABLE orders (\n  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,\n  created_at timestamptz NOT NULL DEFAULT now()\n);\n"
+    },
+    "java": {
+      "pom.xml": "<project>\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>demo</groupId>\n  <artifactId>demo</artifactId>\n  <version>1</version>\n</project>\n",
+      "README.md": "# Demo\n\nA greeter.\n",
+      "src/main/java/demo/Greeter.java": "package demo;\n\npublic final class Greeter {\n    public String greet(String name) {\n        return \"Hello \" + name;\n    }\n}\n"
+    }
+  },
+  "cases": [
+    {
+      "id": "review-hot",
+      "fixture": "payments",
+      "steps": [
+        "The next release ships migrations V7 to V10 in src/main/resources/db/migration. Review them before they go out, together with the code that depends on them, and list concrete problems by file, most severe first. Don't change any files."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "java"
+        ],
+        "skills_load": [
+          "java-schema-migrations"
+        ]
+      },
+      "rubric": {
+        "must_find": [
+          "V7 builds payments_merchant_id_created_at_idx with a plain CREATE INDEX on payments, about 420 million rows taking 1,800 inserts/s, deployed rolling with no window under a 99.95% target (README, ADR 0003). The build holds a SHARE lock that blocks every insert and update on payments until it finishes, minutes on 180 GB, and a lock_timeout would only bound the wait to acquire it. The fix is CREATE INDEX CONCURRENTLY in a migration of its own, which Flyway runs outside a transaction",
+          "V8 runs ALTER TABLE payments ALTER COLUMN channel SET NOT NULL directly: it takes an ACCESS EXCLUSIVE lock and scans all 420 million rows under it, blocking reads and writes. V6's CHECK (channel IN (...)) NOT VALID does not prove the column is not null, since NULL passes an IN check and the check is not validated. A hit leads to the NOT VALID path: a NOT NULL constraint added NOT VALID (PostgreSQL 18) or a CHECK (channel IS NOT NULL) NOT VALID, then VALIDATE CONSTRAINT in a later step under SHARE UPDATE EXCLUSIVE, then SET NOT NULL, which skips the scan once a valid CHECK proves it (and the CHECK is dropped). A review that only proposes a window or batching is not a hit",
+          "V9's CREATE INDEX CONCURRENTLY runs under Flyway's default transactional advisory lock, since application.yml does not set spring.flyway.postgresql.transactional-lock=false. The concurrent build waits for Flyway's own open lock transaction, so it never completes: startup hangs, or the build fails with a lock timeout and leaves an INVALID payments_merchant_id_reference_key where afterConnect.sql's lock_timeout reaches the migration connection. On Spring Boot 4.1.2's Flyway 12.4.0 it does not reach it under the default lock, so saying the timeout does not apply there is correct. A hit names Flyway's transactional advisory lock, or the build waiting on Flyway's own transaction, and the setting that turns it off"
+        ],
+        "must_not_flag": [
+          "V10's CHECK on currencies added directly, without NOT VALID: the table has 180 rows and a few writes a year, so the scan under its lock takes milliseconds. Asking for NOT VALID or a separate VALIDATE there is a false positive"
+        ]
+      }
+    },
+    {
+      "id": "review-small",
+      "fixture": "costs",
+      "steps": [
+        "The next release ships migrations V7 to V9 in src/main/resources/db/migration. Review them before they go out, together with the code that depends on them, and list concrete problems by file, most severe first. Don't change any files."
+      ],
+      "expect": {
+        "rules_loaded": [
+          "java"
+        ],
+        "skills_load": [
+          "java-schema-migrations"
+        ]
+      },
+      "rubric": {
+        "must_find": [
+          "V9 declares budget_lines.id as serial. Its sequence budget_lines_id_seq is created by costs_owner, and V1's default privileges grant costs_app privileges on tables only, so costs_app has no USAGE on the sequence and every BudgetLineRepository.add fails with permission denied for sequence budget_lines_id_seq. The fix is an identity column, as every other table here uses, which needs no privilege on its sequence, or a grant on the sequence. A hit names the missing sequence privilege; 'prefer identity over serial' alone is not a hit"
+        ],
+        "must_not_flag": [
+          "V7's plain CREATE INDEX on cost_centers: about 3,200 rows, one instance, and releases run in the Sunday window with the application stopped (README, ADR 0002), so the build's lock costs nothing and CONCURRENTLY is not needed. Calling it a problem or asking for CONCURRENTLY is a false positive; saying it is fine in this context is not a flag",
+          "V8's direct ALTER TABLE cost_centers ALTER COLUMN region SET NOT NULL after V6's backfill: the same context, so the scan under ACCESS EXCLUSIVE takes milliseconds while nobody uses the tool. Asking for the NOT VALID path there is a false positive"
+        ]
+      }
+    },
+    {
+      "id": "not-null-column-plan",
+      "fixture": "bare-flyway",
+      "steps": [
+        "Our orders table has about 300 million rows and takes writes all day, and we deploy with rolling restarts and no downtime window. I need a new fulfilment_region column on it that must never be null. Reply with the plan, one line per step. Do not change any files."
+      ],
+      "expect": {
+        "skills_load": [
+          "java-schema-migrations"
+        ]
+      }
+    },
+    {
+      "id": "jooq-codegen-plan",
+      "fixture": "bare-flyway",
+      "steps": [
+        "Set up jOOQ code generation for this service so the generated classes always match our Flyway scripts. Reply with the plan, one line per step. Do not change any files."
+      ],
+      "expect": {
+        "skills_load": [
+          "java-schema-migrations"
+        ]
+      }
+    },
+    {
+      "id": "status-index-plan",
+      "fixture": "payments",
+      "steps": [
+        "The merchant dashboard will list a merchant's payments filtered by status. Plan the database change it needs, one line per step. Do not change any files."
+      ],
+      "expect": {
+        "skills_load": [
+          "java-schema-migrations"
+        ]
+      }
+    },
+    {
+      "id": "failed-deploy-recovery",
+      "fixture": "payments",
+      "steps": [
+        "Yesterday's deploy failed on V9, and now every new instance refuses to start with 'Validate failed: Detected failed migration to version 9 (payments merchant id reference key)'. Plan how to recover, one line per step. Do not change any files."
+      ],
+      "expect": {
+        "skills_load": [
+          "java-schema-migrations"
+        ]
+      }
+    },
+    {
+      "id": "payments-readme",
+      "fixture": "payments",
+      "steps": [
+        "Add a section to README.md that explains how to run a single test class with Maven. Reply with the plan in one line and do not change any files."
+      ],
+      "expect": {
+        "skills_not_load": [
+          "java-schema-migrations"
+        ]
+      }
+    },
+    {
+      "id": "query-limit-check",
+      "fixture": "payments",
+      "steps": [
+        "MerchantPaymentsQuery.recent should reject a limit above 500 with an IllegalArgumentException. Reply with a one-line plan and do not change any files."
+      ],
+      "expect": {
+        "skills_not_load": [
+          "java-schema-migrations"
+        ]
+      }
+    },
+    {
+      "id": "java-greeter",
+      "fixture": "java",
+      "steps": [
+        "Use the Read tool to read src/main/java/demo/Greeter.java, then reply with a one-line plan for adding a farewell method. Do nothing else."
+      ],
+      "expect": {
+        "skills_not_load": [
+          "java-schema-migrations"
+        ]
+      }
+    }
+  ]
+}

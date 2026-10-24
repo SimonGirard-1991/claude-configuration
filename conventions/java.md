@@ -23,6 +23,7 @@
   local DB; stacking fix-on-fix migrations is for history others already ran.
   `flyway repair` rewrites the history table (realigns checksums, drops failed entries,
   marks missing migrations deleted) and never re-runs a migration recorded as successful.
+  Load `java-schema-migrations` before writing, recovering or reviewing one.
 - Sonar main-code idioms that recur: unused catch parameter takes `_` (java:S7467);
   identical catch bodies collapse to multi-catch (java:S2147); a string literal of five or
   more characters repeated three times in main code becomes a constant (java:S1192). A
@@ -92,8 +93,9 @@ skills named.
 
 ## Delegated expertise
 Before designing, implementing, advising or reviewing in hexagonal/DDD, observability,
-security, reliability/messaging, performance, testing or money/time/ledgers, load the
-matching `java-*` or `hexagonal-*` skill and read the reference file its map points to.
+security, reliability/messaging, performance, testing, money/time/ledgers or schema
+migrations, load the matching `java-*` or `hexagonal-*` skill and read the reference file
+its map points to.
 Thresholds and checklists live there, not in memory.
 
 ## Review scope

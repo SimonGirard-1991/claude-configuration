@@ -42,6 +42,225 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **`java-schema-migrations` is the Java skill for PostgreSQL schema changes through Flyway**
+  (2026-10-23, Phase 4 of the language-rules plan). It went live on 2026-10-23. The Java
+  body's Delegated expertise routes "schema migrations" to it, and its Migrations bullet
+  names it. Its observation window starts at this change's commit and runs 21 days or 5
+  sessions in Java repos that add, recover or review a Flyway migration, whichever is later.
+  - **What it holds.** Policy and verified facts, not procedures. The headline is
+    conditional: a change's lock, the table's size and write rate, the deployment and the
+    availability target decide whether it needs its online form, and a migration without
+    `CONCURRENTLY` or `NOT VALID` is not a defect in itself. `online-changes.md` has the
+    lock and rewrite of each statement, the lock queue and `lock_timeout`, concurrent index
+    builds, `NOT VALID` then `VALIDATE`, foreign keys, batched backfills, and expand and
+    contract. `flyway-mechanics.md` has non-transactional migrations, Flyway's advisory lock
+    per runner, session settings, failure and `repair`, locations, jOOQ codegen and
+    migration tests. `types-and-naming.md` points to `java-financial-correctness` for
+    `numeric` and `timestamptz` and adds `text` with a `CHECK`, identity columns, naming and
+    the application role's privileges. The listing costs 515 characters of description. A
+    load costs 7,400 characters of `SKILL.md`, plus 6.7k to 19.0k per reference opened.
+    The Java body grew by 96 characters, to 8,712 injected.
+  - **Facts were fetched and run, 2026-10-23.** Context7's monthly quota was exhausted, so
+    the docs came from postgresql.org (18), Redgate's Flyway documentation and jooq.org
+    (3.21). The stack was PostgreSQL 18.6, Flyway 13.11.1 (the CLI image, the Maven plugin
+    and the Java API), Spring Boot 4.1.2 with the Flyway 12.4.0 it manages, jOOQ 3.21.9,
+    pgjdbc 42.7.14, Testcontainers 2.0.5 and JDK 25.0.5.
+    - Each statement's lock came from `pg_locks` inside a transaction, and a rewrite from a
+      changed file node. They match the docs. A catalog-only `ADD COLUMN` waited 5 s behind
+      an open reader, and a `SELECT` behind it waited 4.5 s; with a `lock_timeout` the
+      `ALTER` gave up and the `SELECT` ran.
+    - PostgreSQL 18 lets a not-null constraint be `NOT VALID`. Before its `VALIDATE`, the
+      catalog already reports the column NOT NULL (`attnotnull`, `is_nullable`) while the
+      planner still returns its null rows. `SET NOT NULL` on such a column validates it with
+      a full scan. A valid `CHECK (x IS NOT NULL)` let `SET NOT NULL` skip its scan, and a
+      `CHECK (x IN (…))` did not. A `NOT VALID` constraint added before the backfill made
+      updates of rows not yet backfilled fail.
+    - A concurrent build kept inserts at 0.8 ms where a plain one held them 838 ms, on 10
+      million rows. A `lock_timeout`, a `statement_timeout` or a duplicate left an invalid
+      index, and `IF NOT EXISTS` then skipped it. While it waited, writes went on, and DDL
+      and `VACUUM` waited.
+    - Flyway detects a concurrent build and runs its migration outside a transaction, but
+      its default transactional advisory lock makes the build wait for Flyway's own
+      transaction: startup hung on 13.11.1 and on Boot's 12.4.0, and under a `lock_timeout`
+      it failed. `spring.flyway.postgresql.transactional-lock=false`, the CLI flag, the
+      environment variable, the Java API's extension and the Maven plugin's
+      `<postgresql.transactional.lock>` each fixed it. The Maven element Redgate documents,
+      `<postgresqlTransactionalLock>`, failed with "Unknown configuration property".
+    - A `SET` counts as transactional for Flyway, so `SET lock_timeout` beside a concurrent
+      build failed as a mix. A `SET` in one migration lasted into the next. `SET LOCAL` in a
+      non-transactional migration did nothing. `beforeEachMigrate.sql` set the run's
+      `lock_timeout` before every migration on 13.11.1 and on Boot's 12.4.0, under either
+      lock. `afterConnect.sql` reached the migrations on 12.4.0 only with the transactional
+      lock off (below), and `initSql` warned that it is deprecated.
+    - `repair` on PostgreSQL deleted a failed non-transactional migration's row, realigned
+      an edited migration's checksum without re-running it, and marked a vanished one
+      `DELETE`, as the Java body's Migrations bullet says. A rerun with `IF NOT EXISTS`
+      recorded success over the invalid index it left.
+    - Locations merge into one sequence, a version in two locations fails, and a lower
+      version merged late fails validation unless `outOfOrder` is on.
+    - jOOQ's `DDLDatabase` refused `CREATE INDEX CONCURRENTLY`, `DROP INDEX CONCURRENTLY`,
+      `CHECK … NOT VALID` and `NOT NULL … NOT VALID`. With ignore markers it finished, and its
+      output lacked the index and declared the column nullable. Flyway's Maven plugin and
+      jOOQ's plugin against a real PostgreSQL produced the schema the migrations declare.
+      `testcontainers-jooq-codegen-maven-plugin` 0.0.4 bundles Flyway 9.16.3 and jOOQ
+      3.18.3. jOOQ's manual treats committing the generated code and regenerating it as
+      equally valid, so the bootstrap's "commit generated classes" stands.
+    - A migration test migrated to the version before the change with Flyway's `target`,
+      wrote old-shaped rows, and migrated to the latest. A backfill that wrote the wrong
+      value failed its assertion, and without the backfill the validating migration failed.
+      Without `mvn clean`, a removed migration still ran from `target/classes`.
+    - An identity column needed no sequence privilege for the application role, and a
+      `serial` one did. `COPY` into a `GENERATED ALWAYS` column left the sequence behind.
+      Default privileges covered only tables their named role created. A name over 63
+      bytes was cut with a notice, and two such names collided.
+  - **Every snippet ran, and each pattern was checked against the skill's own rules.** That
+    check corrected two things before go-live:
+    - The concurrent build's migration sets a `lock_timeout` of its own, since the run's
+      short one only cancels the build. The `SET` made Flyway refuse the migration as a
+      mix, so the migration's `.sql.conf` turns the transaction off. With an application
+      transaction open for 8 s, the migration waited it out and built a valid index. Under
+      the run's 5 s, it failed and left an invalid index and a failed row.
+    - A backfill batch keeps its filter in its own `WHERE`. Under `READ COMMITTED`, a batch
+      with the filter only in the subquery that picked it overwrote a concurrent
+      application update. Under `REPEATABLE READ`, every form failed with a serialization
+      error, so a batch there is retried.
+  - **The first review changed four recommendations, each probed on 18.6:**
+    - The build's own `lock_timeout` is long but finite, where the first version set 0. A
+      waiting build let writes through, but an `ALTER TABLE` queued behind it, and a
+      `SELECT` waited 5.5 s behind the `ALTER`. A killed client left the build running, and
+      it later built a valid index no history recorded. `client_connection_check_interval`
+      ended it with "connection to client lost". A build or `VALIDATE` that can outlast
+      startup runs outside the application.
+    - `beforeEachMigrate.sql` replaced `afterConnect.sql`, so the build no longer sets the
+      run's value back at its end.
+    - Backfill batches walk key ranges. Batches that picked rows with `IS NULL ORDER BY id
+      LIMIT` grew from 121 ms to 423 ms over 2 million rows, and key-range ones stayed at
+      13 ms.
+    - The lock table gained `ADD CONSTRAINT … UNIQUE` and `PRIMARY KEY`, which build their
+      index under ACCESS EXCLUSIVE, and the `USING INDEX` forms: a primary key scanned a
+      nullable column and refused a `NOT VALID` not-null.
+
+    It also labelled the jOOQ snippet as the regenerate-every-build model and gave the
+    committed model its form. Two regenerations from fresh databases were byte-identical,
+    so CI can fail on `git diff --exit-code`. The migration test now asserts the
+    backfilled value: a backfill that wrote the wrong value failed it, which `VALIDATE`
+    cannot catch.
+  - **An independent review, checked on 2026-10-24, qualified seven points.** Each was
+    reproduced on 18.6 before it changed the text:
+    - A lock lasts until its transaction commits. A `VALIDATE` in the same transaction as
+      its `ADD … NOT VALID` held a reader 2.0 s, and Flyway's `group=true` merges
+      migrations into one transaction.
+    - Grants add up, so a column grant restricts nothing beside a table-wide `UPDATE`, and
+      a new schema needs `USAGE`.
+    - `setval(…, max(id))` is safe only with no concurrent writer: a writer's uncommitted
+      id 501 collided.
+    - `afterEachMigrate` does not run after a failure: a failed non-transactional migration
+      left its pooled connection at `lock_timeout = 10min`. The text now leads with the
+      separate migration user.
+    - An invalid leftover is maintained and enforces uniqueness only when `indisready`.
+      Adopting one checks its definition too.
+    - Four summary rules were narrowed: database-generated keys, the backfill order for
+      constraints existing rows violate, the build's timeout, and every running writer.
+    - A collation change rebuilds an index without a table rewrite.
+
+    The probe scripts lived in that session's scratchpad and are not in the repo. A later
+    cleanup pass the same day narrowed what a concurrent build waits for. It found that
+    idle READ COMMITTED transactions and idle sessions did not delay the build. Its first
+    blockers held a running `pg_sleep`, which has a snapshot of its own. They were redone
+    with client-side sleeps before the text changed. Those clean cases, the plain build's
+    lock lifetime and the `max(id)` visibility case are kept as
+    `evals/java-schema-migrations/probes/lock-and-visibility.sh`. It creates and drops its
+    own database in a running PostgreSQL 18 container, and changes nothing without
+    `--yes`. Its run reproduced every figure but one: the plain build's insert waited 2.9 s
+    because it was sent sooner, and the reference now cites the script's figure.
+  - **The second review found the run's settings leaking into the application's pool.**
+    Under Spring Boot, Flyway borrows a pooled connection unless `spring.flyway.user` or
+    `url` is set. The connection that ran the migrations went back to the pool still holding
+    the callback's 5 s `lock_timeout` and 1 s `client_connection_check_interval`, on 12.4.0
+    and on 13.11.1, until HikariCP retires it after 30 minutes. An `afterEachMigrate.sql`
+    that resets both left the pool clean, and so did a separate migration user.
+
+    The skill's examples use `shipments`, not the fixtures' tables, and none of its numbers
+    or names is a fixture's. Its headline, the same `CREATE INDEX` judged in two contexts,
+    is the plan's own and the design of the eval. It still teaches, as general facts, every
+    seeded trap almost as the rubric words them: a NULL passing `c IN (…)`, Flyway's
+    transactional advisory lock and the setting that turns it off, and a `serial` sequence
+    that table-only default privileges do not cover. Since the first review it also teaches
+    that `afterConnect.sql` misses the migrations on Boot's 12.4.0 under the default lock,
+    which is the hot fixture's own case. So the treatment is not independent on those
+    items. Both conditions sit at the ceiling now, but a later treatment's score on them,
+    or one that raises the `afterConnect` point, is not evidence of the skill's effect.
+  - **The review eval.** Two fixtures state their context in a README and an ADR, and each
+    one's migrations ran on PostgreSQL 18.6 before the baseline, which reproduced every
+    rubric claim. The hot fixture is a payments service: 420 million rows taking 1,800
+    inserts/s, six instances under rolling deploys with no window, and a 99.95% target. It
+    seeds a plain `CREATE INDEX`, a direct `SET NOT NULL`, and a concurrent unique build
+    under Flyway's default transactional lock. Its direct `CHECK` on a 180-row table must
+    not be flagged. The small fixture is a single-instance back-office tool released in a
+    Sunday window with the application stopped. Its plain index and direct `SET NOT NULL`
+    must not be flagged, and it seeds a `serial` key whose sequence the application role
+    cannot use. Opus at xhigh ran three reviews per condition and case, and a subagent
+    graded each case blind, given the skill's three references:
+    - hot: baseline 9 of 9 seeded defects, 31 other useful findings, no false positives and
+      no correct item flagged; treatment 9 of 9, 25, none and none;
+    - small: baseline 3 of 3, 19, none and none; treatment 3 of 3, 16, none and none.
+
+    Both cases sit at the model's ceiling, as Phases 1 to 3 did, and the skill made no
+    measurable difference to what the reviews found. It made them shorter: the treatment's
+    hot reviews took 3.5 to 4.5 minutes, $0.94 to $1.12 and 8 to 13 tool calls, where the
+    baseline's took 8 to 13 minutes, $1.58 to $2.77 and 20 to 40 tool calls, testing the
+    fixture on their own containers.
+  - **The baseline found what the skill got wrong.** Two baseline hot reviews reported that
+    `afterConnect.sql`'s `lock_timeout` never reached the migrations. The grader marked both
+    false against the reference, which said the callback runs on every connection. A probe
+    confirmed the reviews for Spring Boot 4.1.2's Flyway 12.4.0 under the default lock,
+    while 13.11.1 reached the migrations under either lock. The reference and the hot
+    rubric's wording were corrected, and the two findings count as useful above.
+    `grades.json` keeps the grader's original classes. No treatment answer raised the
+    point, which the wrong sentence may explain.
+  - **Selection, haiku at low effort, three runs per case.** The baseline loaded nothing,
+    since the skill did not exist yet. With the skill as first written:
+    - negatives, 0 of 3 each: a README task and a query limit check in the payments
+      fixture, and the greeter;
+    - positives: a NOT NULL column in a bare repo 3 of 3, a status index in the payments
+      fixture 2 of 3, jOOQ codegen in a bare repo 0 of 3, and recovering a failed deploy 0
+      of 3.
+
+    In the missed runs, haiku read the repo with `find` and `cat` and planned from it, as in
+    Phase 3, and it answered the recovery from the Java body's own Migrations bullet. Two
+    wordings were probed. A description leading with planning, recovery, `repair` and jOOQ
+    codegen brought codegen to 3 of 3 and left recovery at 0. That description plus "Load
+    `java-schema-migrations` before writing, recovering or reviewing one." in the
+    Migrations bullet scored 3 of 3 on all four positives and 0 of 3 on all three
+    negatives. The tree holds that second wording, and the owner decides whether it stays.
+    The treatment reviews ran before it, on the first description without the pointer.
+  - **Cost.** $11.02 for the baseline reviews, the rerun included, $5.37 for the treatment
+    reviews, $0.30 for selection and $0.34 for the two probes: $17.03 in all. The results
+    are in `20261023T204233Z` and `20261023T215122Z` for the baseline reviews,
+    `20261023T213940Z` to `20261023T213950Z` for the treatment reviews (graded in the
+    first one's `grading/`), `20261023T204239Z` and `20261023T213952Z` for selection, and
+    `20261023T214735Z` to `20261023T214745Z` and `20261023T214909Z` to `20261023T214918Z`
+    for the probes, all `-java-schema-migrations`.
+  - **A run that delegates can outlast the timeout.** The first baseline run of the hot
+    fixture spawned a background `code-reviewer` and had not answered at 1,200 seconds. It
+    was rerun with the skill hidden. The treatment's six reviews ran as six parallel
+    invocations of one run each, which cut the wall-clock time from about an hour to five
+    minutes.
+  - **Rejected:**
+    - `DDLDatabase` as the codegen route: it refuses the online statements this skill
+      recommends.
+    - `mixed=true` for a migration that needs one non-transactional statement: a failure
+      halfway leaves its first statements applied.
+    - A fixed rule for a concurrent build's timeout. It bounds each wait, not the build:
+      under 1 s, a 2.4 s build finished with no blocker, and failed behind an uncommitted
+      writer or an older snapshot. So the skill makes it a choice by expected blockers
+      (cleanup pass, 2026-10-24).
+    - No `lock_timeout` at all on a concurrent build: other DDL, and the reads behind it,
+      queue behind its wait for as long as it lasts.
+    - `afterConnect.sql` for the run's `lock_timeout`: on Boot 4.1.2's Flyway 12.4.0 it does
+      not reach the migrations under the default lock.
+    - Reusing the fixtures' tables or numbers in the skill.
+
 - **`java-financial-correctness` is the Java skill for money, time and ledgers**
   (2026-10-23, Phase 3 of the language-rules plan). It went live on 2026-10-23, and the
   Java body's Delegated expertise routes "money/time/ledgers" to it. Its observation
