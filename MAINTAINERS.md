@@ -246,6 +246,12 @@ says explicitly that the external reviewer was skipped — no retry loop.
     was rerun with the skill hidden. The treatment's six reviews ran as six parallel
     invocations of one run each, which cut the wall-clock time from about an hour to five
     minutes.
+  - **After the commit** (2026-10-24). The third review's three 🔵 went into
+    `flyway-mechanics.md` § Session settings: the leak happens under either lock,
+    `afterMigrate.sql` resets the wrong connection, and `RESET` drops what HikariCP's init
+    SQL set. The `hexagonal-module-bootstrap` jOOQ template now names its constraints and
+    index with PostgreSQL's own suffixes. The constraints keep the names Postgres gave them,
+    so only the index's generated name changes.
   - **Rejected:**
     - `DDLDatabase` as the codegen route: it refuses the online statements this skill
       recommends.
@@ -259,6 +265,8 @@ says explicitly that the external reviewer was skipped — no retry loop.
       queue behind its wait for as long as it lasts.
     - `afterConnect.sql` for the run's `lock_timeout`: on Boot 4.1.2's Flyway 12.4.0 it does
       not reach the migrations under the default lock.
+    - `afterMigrate.sql` to reset the run's settings: it ran on another pooled connection,
+      on 12.4.0 and 13.11.1 under either lock, so the migrations' connection kept them.
     - Reusing the fixtures' tables or numbers in the skill.
 
 - **`java-financial-correctness` is the Java skill for money, time and ledgers**

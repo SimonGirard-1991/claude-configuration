@@ -86,7 +86,7 @@ pages.
     deprecated in favour of `afterConnect`.
   - `SELECT current_setting('lock_timeout')` inside a migration shows what a runner applies.
 - Under Spring Boot, Flyway borrows a connection from the application's pool unless
-  `spring.flyway.user` or `spring.flyway.url` is set. With the transactional lock off, the
+  `spring.flyway.user` or `spring.flyway.url` is set. Under either lock setting, the
   migrations ran on one pooled connection, which went back to the pool holding the
   callback's `lock_timeout` and `client_connection_check_interval`. The application's
   queries on it then ran under them, until HikariCP retires the connection (`maxLifetime`,
@@ -98,7 +98,13 @@ pages.
   - Where Flyway must share the pool, an `afterEachMigrate.sql` holding
     `RESET lock_timeout;` and `RESET client_connection_check_interval;` left every pooled
     connection at its defaults after a successful run, on 12.4.0 and 13.11.1. The next
-    migration still ran under `beforeEachMigrate.sql`'s value.
+    migration still ran under `beforeEachMigrate.sql`'s value. `afterMigrate.sql`, which
+    runs once per run, ran on another connection and left the migrations' connection
+    holding them.
+  - `RESET` returns a setting to its value before any `SET` in the session. A value from
+    the JDBC `options` parameter or `ALTER ROLE … SET` came back, and one set by HikariCP's
+    `connection-init-sql` was lost on that connection. A service whose init SQL sets them
+    repeats those values in `afterEachMigrate.sql` instead of resetting them.
   - `afterEachMigrate` runs only after a successful migration, and `afterEachMigrateError`
     after a failed one. A failed transactional migration rolled the callback's `SET`s back
     with it. A failed non-transactional one left its connection in the pool with
