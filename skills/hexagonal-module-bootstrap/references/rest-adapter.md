@@ -145,10 +145,11 @@ components:
     Problem:
       type: object
       properties:
-        type:   { type: string, format: uri }
-        title:  { type: string }
-        status: { type: integer }
-        detail: { type: string }
+        type:     { type: string, format: uri-reference }
+        title:    { type: string }
+        status:   { type: integer }
+        detail:   { type: string }
+        instance: { type: string, format: uri-reference }
 
   responses:
     Problem:
@@ -164,7 +165,7 @@ Notes on the contract:
 - **Status enum is explicit** in the spec. Consumers generate their own enum from it. Never return free-form strings from domain enums without guaranteeing the mapping is stable.
 - **Versioning is in the URL** (`/v1/orders`) AND in schema names (`PlaceOrderV1Request`). Both matter: URL for runtime routing, names for coexistence when you introduce `V2` schemas in the same spec before retiring `V1`.
 - **A breaking change means a new operation and new schemas, not edits in place.** The generator and consumers both rely on stable schema names.
-- **The `Problem` schema is RFC 7807.** Let your generator map it to Spring's `ProblemDetail` if it supports that; otherwise a plain POJO is fine. `ProblemDetail` mapping is orthogonal to contract-first.
+- **The `Problem` schema is [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457)**, which obsoletes RFC 7807. An absent `type` means `about:blank`, whose `title` should be the status code's reason phrase. Let your generator map it to Spring's `ProblemDetail` if it supports that; otherwise a plain POJO is fine. `ProblemDetail` mapping is orthogonal to contract-first.
 
 ## Build plugin
 
@@ -342,7 +343,7 @@ The `StatusEnum.valueOf(order.status().name())` relies on the spec's enum values
 
 ## Exception handling
 
-RFC 7807 `ProblemDetail`, same as before. The YAML reserves the status codes; the handler produces the payloads.
+RFC 9457 `ProblemDetail`, same as before. The YAML reserves the status codes; the handler produces the payloads. Each problem sets a `type` of its own, because its title is its own. Spring MVC's own errors that nothing here maps (a body that fails `@Valid`, a path with no handler, a wrong method) come from Boot's `/error` as plain JSON unless `spring.mvc.problemdetails.enabled=true`.
 
 ```java
 // order/infrastructure/web/OrderExceptionHandler.java
@@ -351,6 +352,7 @@ package com.company.ecom.order.infrastructure.web;
 import com.company.ecom.order.application.exception.ConcurrentAggregateModificationException;
 import com.company.ecom.order.application.exception.PaymentDeclinedException;
 import com.company.ecom.order.domain.exception.*;
+import java.net.URI;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 
@@ -359,31 +361,32 @@ public class OrderExceptionHandler {
 
   @ExceptionHandler(EmptyOrderException.class)
   public ProblemDetail onEmpty(EmptyOrderException e) {
-    return problem(HttpStatus.BAD_REQUEST, "Invalid order", e.getMessage());
+    return problem(HttpStatus.BAD_REQUEST, "invalid-order", "Invalid order", e.getMessage());
   }
 
   @ExceptionHandler({OrderAlreadyShippedException.class, InvalidOrderStateException.class})
   public ProblemDetail onConflict(RuntimeException e) {
-    return problem(HttpStatus.CONFLICT, "Invalid order state", e.getMessage());
+    return problem(HttpStatus.CONFLICT, "invalid-order-state", "Invalid order state", e.getMessage());
   }
 
   @ExceptionHandler(PaymentDeclinedException.class)
   public ProblemDetail onDeclined(PaymentDeclinedException e) {
-    return problem(HttpStatus.PAYMENT_REQUIRED, "Payment declined", e.getMessage());
+    return problem(HttpStatus.PAYMENT_REQUIRED, "payment-declined", "Payment declined", e.getMessage());
   }
 
   @ExceptionHandler(ConcurrentAggregateModificationException.class)
   public ProblemDetail onConcurrentModification(ConcurrentAggregateModificationException e) {
-    return problem(HttpStatus.CONFLICT, "Concurrent modification", e.getMessage());
+    return problem(HttpStatus.CONFLICT, "concurrent-modification", "Concurrent modification", e.getMessage());
   }
 
   @ExceptionHandler(IllegalArgumentException.class)
   public ProblemDetail onIllegalArgument(IllegalArgumentException e) {
-    return problem(HttpStatus.BAD_REQUEST, "Invalid request", e.getMessage());
+    return problem(HttpStatus.BAD_REQUEST, "invalid-request", "Invalid request", e.getMessage());
   }
 
-  private static ProblemDetail problem(HttpStatus status, String title, String detail) {
+  private static ProblemDetail problem(HttpStatus status, String type, String title, String detail) {
     var p = ProblemDetail.forStatus(status);
+    p.setType(URI.create("https://api.company.example/problems/" + type));
     p.setTitle(title);
     p.setDetail(detail);
     return p;

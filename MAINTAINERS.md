@@ -42,6 +42,20 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **The event-sourcing reference is dropped, and `rest-adapter.md` cites RFC 9457**
+  (2026-10-26, Phase 5b of the language-rules plan). A `hexagonal-ddd-java` reference on
+  event sourcing was built, measured and reviewed on 2026-10-24 and 25, and never committed.
+  Its review eval sat at the ceiling: 9 of 9 seeded defects in both conditions, with 60 other
+  useful findings without it and 50 with it. With haiku, selection read it in 0 of 3 runs on
+  each of the four positives. Fourteen review rounds each found three to five 🟡, and the
+  count never fell, because every fix added a procedure that the next round could check
+  against the others. The owner dropped the reference with its routing, its eval cases and
+  its probes. Only the RFC 9457 correction stays: the citation, `type` and `instance` as URI
+  references, a `type` for each of the template's problems because their titles are their
+  own, and one sentence on `spring.mvc.problemdetails.enabled`.
+  - **Rejected:** an event-sourcing reference, since the model reviewed event-sourced code at
+    the ceiling without one. Revisit only after a miss observed in a real repo.
+
 - **`java-reliability-messaging` gains concurrency control and scheduled jobs**
   (2026-10-24, Phase 5a of the language-rules plan). Two references went live on
   2026-10-24: `concurrency-control.md` and `scheduled-jobs.md`. `SKILL.md` routes both from
