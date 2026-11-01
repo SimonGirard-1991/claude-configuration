@@ -11,10 +11,14 @@
   return type only — never a parameter, field or record component; model absence as a
   nullable field and expose `Optional` from an accessor — on a record, from a separately
   named method (`maybeNickname()`), because a component accessor must return the
-  component's type. Each permitted type of a sealed interface lives in its own file, with
-  an explicit `permits`. No `permits`, `record`, `sealed`, `var` or `yield` (the words
-  JLS §3.8 bars from type names) as a local variable, parameter or field name, even where
-  javac accepts it.
+  component's type. A public or protected nested type (an interface's member types are
+  public implicitly) stays nested only when it is useful only alongside its enclosing type
+  (Effective Java, Item 24): every class that uses it also uses the enclosing type, as
+  `Map.Entry` goes with `Map`. A type other code uses on its own is top-level, in its own
+  file in its package, whatever the surrounding file nests. Each permitted type of a
+  sealed interface lives in its own file, with an explicit `permits`. No `permits`,
+  `record`, `sealed`, `var` or `yield` (the words JLS §3.8 bars from type names) as a local
+  variable, parameter or field name, even where javac accepts it.
 - Time comes from an injected `java.time.Clock`, never `Instant.now()` or
   `System.currentTimeMillis()`, in any layer.
 - Versions are fetched, never recalled: the latest release (Context7, Maven Central, the

@@ -42,6 +42,21 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **A public nested type only alongside its owner** (2026-10-26, from PersonalFinance's
+  refactor backlog step 8). `conventions/java.md` § Stack, "Mainstream shapes", now keeps a
+  public or protected nested type only when every class that uses it also uses the
+  enclosing type, which is Effective Java's Item 24 criterion. A type used on its own goes
+  top-level, in its own file. A session had nested a public `LockKeys` record in a port
+  interface, following that file's nine nested records, and the self-review loop called it
+  consistent. The owner rejected it and asked for the rule in the general Java rules, so
+  that both the authoring session and the reviewer read it.
+  - **Rejected:** a blanket ban on public nested types, the rule's first wording the same
+    day. The owner wants the industry's standard, not a stricter house rule. The JDK
+    (`Map.Entry`, `Thread.State`, `HttpClient.Builder`), Effective Java's Items 2 and 24,
+    and Spring Boot's nested `@ConfigurationProperties` groups all nest public types used
+    with their owner. Measured in PersonalFinance at `106ed2e`: 7 of its 44 public nested
+    types fail the criterion, and `LockKeys` would have been an eighth.
+
 - **The event-sourcing reference is dropped, and `rest-adapter.md` cites RFC 9457**
   (2026-10-26, Phase 5b of the language-rules plan). A `hexagonal-ddd-java` reference on
   event sourcing was built, measured and reviewed on 2026-10-24 and 25, and never committed.
