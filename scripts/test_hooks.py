@@ -586,6 +586,7 @@ def test_sonar_gate() -> None:
            "CLAUDE_SONAR_JAVA_ANNOTATIONS": JAVA_ANNOTATIONS,
            "STUB_GATE_LOG": str(log), "STUB_GATE_INDEXED_LOG": str(fx / "indexed.log"),
            "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+    env.pop("CLAUDE_PROJECT_DIR", None)
 
     def git(repo: Path, *args: str) -> None:
         subprocess.run(["git", "-C", str(repo), "-c", "user.name=fixture",
@@ -1095,6 +1096,102 @@ def test_sonar_gate() -> None:
     check("sonar-gate: an unknown scope turns the gate OFF, loudly",
           proc.returncode == 0 and len(calls()) == before and "OFF" in shown(proc),
           f"exit {proc.returncode}, stdout {proc.stdout[:200]!r}")
+
+    # The fingerprint is content, not history: under scope = project neither a commit nor a
+    # push moves it, and an edit that the index's flags hide from git diff still does.
+    repo = new_repo("content", "main")
+    put(repo / ".sonar-gate", "scope = project\n")
+    git(repo, "commit", "-q", "-am", "whole project")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    stop(repo)
+    put(repo / new, "class New {}\n")
+    before = len(calls())
+    stop(repo)
+    rescanned("scope = project: a new untracked java file re-scans", before)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "new")
+    before = len(calls())
+    stop(repo)
+    rescanned("scope = project: committing that file, content unchanged, does not re-scan",
+              before, 0)
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    before = len(calls())
+    stop(repo)
+    rescanned("scope = project: a push, content unchanged, does not re-scan", before, 0)
+    git(repo, "update-index", "--assume-unchanged", app)
+    put(repo / app, "class App { int hidden; }\n")
+    before = len(calls())
+    stop(repo)
+    rescanned("scope = project: an edit that --assume-unchanged hides from git diff re-scans",
+              before)
+
+    # Under scope = changed the base decides which files count, so a push still re-scans.
+    two = "src/main/java/Two.java"
+    repo = new_repo("changed-push", "main")
+    put(repo / two, "class Two {}\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "two")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    put(repo / app, "class App { int pushed; }\n")
+    git(repo, "commit", "-q", "-am", "unpushed")
+    put(repo / two, "class Two { int open; }\n")
+    stop(repo)
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    before = len(calls())
+    stop(repo)
+    check("sonar-gate: scope = changed: a push re-scans the files still changed",
+          len(calls()) == before + 1 and calls()[-1] == [two], f"calls {calls()[before:]}")
+
+    # git diff obeys the index's flags when it lists the change set, so clearing one changes
+    # what the gate is asked about.
+    repo = new_repo("flag-cleared", "main")
+    put(repo / two, "class Two {}\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "two")
+    git(repo, "checkout", "-q", "-b", "feature")
+    put(repo / two, "class Two { int seen; }\n")
+    git(repo, "update-index", "--assume-unchanged", app)
+    put(repo / app, "class App { int hidden; }\n")
+    stop(repo)
+    git(repo, "update-index", "--no-assume-unchanged", app)
+    before = len(calls())
+    stop(repo)
+    check("sonar-gate: scope = changed: clearing a flag on an edited file re-scans it",
+          len(calls()) == before + 1 and calls()[-1] == [app, two], f"calls {calls()[before:]}")
+
+    # A turn whose shell ended in a nested repository answers for the project it started in.
+    outer = new_repo("outer", "main")
+    put(outer / ".gitignore", "plan/\n")
+    git(outer, "add", "-A")
+    git(outer, "commit", "-q", "-m", "plan kept apart")
+    plan = outer / "plan"
+    put(plan / "steps.md", "- [ ] step\n")
+    git(fx, "init", "-q", "-b", "main", str(plan))
+    stop(outer)
+    put(outer / app, "class App { int nested; }\n")
+    before = len(calls())
+    stop(plan)
+    rescanned("a Stop from a nested repository with no project directory stays inert", before, 0)
+    before = len(calls())
+    stop(plan, CLAUDE_PROJECT_DIR=str(outer))
+    rescanned("a Stop from a nested repository gates the project the session started in", before)
+    shell = new_repo("shell", "main")
+    put(shell / new, "class New {}\n")
+    before = len(calls())
+    stop(shell, CLAUDE_PROJECT_DIR=str(outer))
+    check("sonar-gate: the shell's opted-in repository wins over the project directory",
+          len(calls()) == before + 1 and calls()[-1] == [new], f"calls {calls()[before:]}")
+    off = new_repo("off", "main")
+    (off / ".sonar-gate").unlink()
+    put(off / app, "class App { int off; }\n")
+    before = len(calls())
+    proc = stop(off, CLAUDE_PROJECT_DIR=str(outer))
+    check("sonar-gate: a deleted .sonar-gate in the shell's repository is not swapped for the "
+          "project's",
+          proc.returncode == 0 and len(calls()) == before and "OFF" in shown(proc),
+          f"exit {proc.returncode}, {len(calls()) - before} new calls, stdout {proc.stdout!r}")
 
     # Failures reach the user whole, through a systemMessage: a Stop hook's exit 1 would show
     # only the first line of its stderr.
@@ -1940,8 +2037,13 @@ def test_sonar_gate_script() -> None:
         ("an untracked file rebuilds its project",
          lambda: (fresh / "src").mkdir() or (fresh / "src/New.java").write_text("class N {}\n"),
          {}, (1, 0)),
-        ("a commit rebuilds both", lambda: (git_in(fresh, "add", "-A"),
-                                            git_in(fresh, "commit", "-q", "-m", "y")), {}, (1, 1)),
+        ("a commit alone rebuilds nothing", lambda: (git_in(fresh, "add", "-A"),
+                                                     git_in(fresh, "commit", "-q", "-m", "y")),
+         {}, (0, 0)),
+        ("an edit that --assume-unchanged hides from git diff rebuilds its project",
+         lambda: (git_in(fresh, "update-index", "--assume-unchanged", "pom.xml"),
+                  (fresh / "pom.xml").write_text("<project><!-- hidden --></project>\n")),
+         {}, (1, 0)),
         ("another analysis on the server rebuilds both", None, {"STUB_ANALYSIS": "a2"}, (1, 1)),
         ("a profile changed on the server rebuilds both", None,
          {"STUB_ANALYSIS": "a2", "STUB_RULES_UPDATED": "t2"}, (1, 1)),

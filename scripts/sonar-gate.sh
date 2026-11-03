@@ -800,28 +800,30 @@ provision() {
 
 # ── analysis ─────────────────────────────────────────────────────────────────
 
-# Prints a hash of what an analysis of project $1 reads: the commit, the uncommitted and
-# untracked changes under the project's paths, the rules file and .sonar-gate, this script, the
-# build mode, the server's version and its stamp on the project's profiles. Fails outside git.
+# Prints a hash of what an analysis of project $1 reads: the blob of every file under the
+# project's paths as the working tree holds it, tracked or untracked and not ignored, the rules
+# file and .sonar-gate, this script, the build mode, the server's version and its stamp on the
+# project's profiles. Fails outside git. Content, not history: with the HEAD commit in the hash,
+# each commit cost a full scan. The scanner does read blame, so leaving history out holds only
+# while the verdict counts every open issue, hotspot and duplicated block, new code or not, and
+# while --with-coverage, whose quality gate reads new code, never answers Maven from this cache.
+# The blobs come through an empty scratch index, so no flag in the real one can hide an edit,
+# and --info-only writes no object. A submodule under the project's paths that is not checked
+# out makes update-index fail, which empties the hash, so that project is rebuilt every time.
+# The Maven project's paths cover the whole repository, so any such submodule does it.
 inputs_fp() {
-  local spec=()
+  local spec=() index="$SCRATCH/fp-index-$1"
   if [ "${P_KIND[$1]}" = js ]; then spec=("$JS_DIR"); else
     spec=(.)
     [ -z "$JS_DIR" ] || spec+=(":(exclude)$JS_DIR")
   fi
+  rm -f "$index"
   (
     set -o pipefail
     {
-      if git -C "$ROOT" rev-parse --verify --quiet 'HEAD^{commit}'; then
-        git -C "$ROOT" diff --no-ext-diff --no-textconv --binary HEAD -- "${spec[@]}"
-      else
-        echo unborn
-      fi &&
-        git -C "$ROOT" ls-files --others --exclude-standard -z -- "${spec[@]}" |
-        while IFS= read -r -d '' f; do
-          printf '%s ' "$f"
-          git -C "$ROOT" hash-object -- "$f" || exit 1
-        done &&
+      git -C "$ROOT" ls-files -z --cached --others --exclude-standard -- "${spec[@]}" |
+        GIT_INDEX_FILE="$index" git -C "$ROOT" update-index -z --add --remove --info-only --stdin &&
+        GIT_INDEX_FILE="$index" git -C "$ROOT" ls-files -s -z -- "${spec[@]}" &&
         { [ -z "$RULES_FILE" ] || cat "$ROOT/$RULES_FILE"; } &&
         { [ ! -f "$ROOT/.sonar-gate" ] || cat "$ROOT/.sonar-gate"; } &&
         cat "${BASH_SOURCE[0]}" &&

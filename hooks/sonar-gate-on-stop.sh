@@ -75,7 +75,9 @@
 # debug log only, so that report reached no one.
 #
 # Inert unless the repo opts in with a `.sonar-gate` file at its root. A tree that deletes the
-# marker while its base still has it gets a systemMessage, because that turns the gate off.
+# marker while its base still has it gets a systemMessage, because that turns the gate off. The
+# repo is the one the session's shell is in. When that one has not opted in, it is the one the
+# session started in ($CLAUDE_PROJECT_DIR), if that one has.
 #
 # It never boots infrastructure: --no-boot means a stopped SonarQube exits 1 telling you to run
 # the script by hand once, rather than a container appearing mid-turn and a ~20s wait landing
@@ -87,14 +89,18 @@
 # `js-project = DIR` adds that directory to the file set, and its sonar-project.properties to the
 # suppression audit, under the pom rule; `rules = FILE` adds the rules file to the fingerprint
 # and to an audit of its own, since a rule taken out narrows the gate. `scope = project`
-# blocks on any finding anywhere instead of the changed files' findings: a commit then moves the
-# fingerprint through the base, so the whole project is counted again.
+# blocks on any finding anywhere instead of the changed files' findings.
 #
 # A green run is remembered: a Stop whose fingerprinted inputs match the last green run skips the
-# scan instead of paying for another Maven build. The fingerprint covers the base commit, and the
-# diff against it plus the untracked files for java sources, poms, the contract schemas that
-# rules/java.md's paths: lists, the JS project's directory and the rules file; then
-# `.sonar-gate`, the gate script and this hook. Only a green
+# scan instead of paying for another Maven build. The fingerprint is content, not history: the
+# blob of every file the working tree holds, tracked or untracked and not ignored, among java
+# sources, poms, the contract schemas that rules/java.md's paths: lists, the JS project's
+# directory and the rules file; then the scope, `.sonar-gate`, the gate script and this hook.
+# The gated files that carry an assume-unchanged or skip-worktree flag count too, since git diff
+# obeys the flags when it lists the change set. Under `scope = changed` the base commit counts,
+# since it decides which files are changed. Under `scope = project` it does not: a commit or a
+# push there changes no content, so the turn after one does not pay for a scan of a tree already
+# analysed. History in the fingerprint used to make it pay. Only a green
 # run records it, and it is taken before the change set is read: anything that lands later,
 # mid-scan included, changes the next fingerprint instead of being recorded as clean without
 # having been analyzed. Everything else the build reads is outside it — resources,
@@ -116,16 +122,39 @@ agent=$(printf '%s' "$payload" | /usr/bin/jq -r '.agent_id // .session_id // "no
 [ -n "$cwd" ] || cwd="$PWD"
 agent=$(printf '%s' "$agent" | tr -c 'a-zA-Z0-9_-' '-')
 
-repo=$(cd "$cwd" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)
-[ -n "$repo" ] || exit 0
+toplevel() {
+  (cd "$1" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)
+}
 
 # Committed work on a feature branch counts too, so compare against the fork point when there
 # is one rather than only the working tree.
-base=""
-for ref in refs/remotes/origin/HEAD refs/heads/main refs/heads/master; do
-  base=$(git -C "$repo" merge-base HEAD "$ref" 2>/dev/null) && break
-done
-[ -n "$base" ] || base="HEAD"
+fork_point() {
+  local ref point
+  for ref in refs/remotes/origin/HEAD refs/heads/main refs/heads/master; do
+    if point=$(git -C "$1" merge-base HEAD "$ref" 2>/dev/null); then
+      printf '%s\n' "$point"
+      return 0
+    fi
+  done
+  echo HEAD
+}
+
+opted_in() {
+  [ -f "$1/.sonar-gate" ] || git -C "$1" cat-file -e "$(fork_point "$1"):.sonar-gate" 2>/dev/null
+}
+
+# A turn whose shell ended in a nested repository, such as a plan kept in a repository of its
+# own, is still the project's turn. Without this fallback its code changes went unchecked
+# until a later Stop from the project root, often a docs-only one, paid for the scan.
+repo=$(toplevel "$cwd")
+if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && ! { [ -n "$repo" ] && opted_in "$repo"; }; then
+  project=$(toplevel "$CLAUDE_PROJECT_DIR")
+  if [ -n "$project" ] && opted_in "$project"; then
+    repo="$project"
+  fi
+fi
+[ -n "$repo" ] || exit 0
+base=$(fork_point "$repo")
 
 tell_user() {
   MSG="$1" /usr/bin/jq -n \
@@ -192,16 +221,32 @@ js_sources=()
 fp_paths+=(${js_sources[@]+"${js_sources[@]}"})
 [ -z "$rules_file" ] || fp_paths+=("$rules_file")
 
+# Prints, NUL-separated, `mode blob stage<TAB>path` for every file under the pathspecs $2... as
+# the working tree holds it, tracked or untracked and not ignored. $1 is a scratch index path
+# that must not exist yet. The index starts empty, so no flag in the real one (assume-unchanged,
+# skip-worktree) can hide an edit, and --info-only writes no object. A submodule under these
+# paths that is not checked out makes update-index fail, which empties the fingerprint: every
+# Stop that reaches it then calls the gate.
+worktree_blobs() {
+  local index="$1"
+  shift
+  git -C "$repo" ls-files -z --cached --others --exclude-standard -- "$@" |
+    GIT_INDEX_FILE="$index" git -C "$repo" update-index -z --add --remove --info-only --stdin &&
+    GIT_INDEX_FILE="$index" git -C "$repo" ls-files -s -z -- "$@"
+}
+
 fingerprint() (
   set -o pipefail
+  scratch=$(mktemp -d "${TMPDIR:-/tmp}/claude-sonar-index.XXXXXX") || exit 1
+  trap 'rm -rf "$scratch"' EXIT
+  base_commit=$(git -C "$repo" rev-parse --verify --quiet "$base^{commit}") || exit 1
+  flagged=$(git -C "$repo" ls-files -v -z -- "${fp_paths[@]}" | LC_ALL=C tr '\0' '\n' |
+    LC_ALL=C awk '/^([a-z]|S) /') || exit 1
   {
-    git -C "$repo" rev-parse --verify --quiet "$base^{commit}" &&
-      git -C "$repo" diff --no-ext-diff --no-textconv --no-color "$base" -- "${fp_paths[@]}" &&
-      git -C "$repo" ls-files --others --exclude-standard -z -- "${fp_paths[@]}" |
-      while IFS= read -r -d '' f; do
-        printf '%s ' "$f"
-        git -C "$repo" hash-object -- "$f" || exit 1
-      done &&
+    printf 'scope %s\n' "$scope"
+    [ "$scope" = project ] || printf 'base %s\n' "$base_commit"
+    printf 'flagged %s\n' "$flagged"
+    worktree_blobs "$scratch/index" "${fp_paths[@]}" &&
       cat "$repo/.sonar-gate" "$GATE" "${BASH_SOURCE[0]}"
   } | shasum -a 256 | cut -d' ' -f1
 )
@@ -915,8 +960,8 @@ report_suppressions() {
     printf '%s\n' "$key" >"$reported_file"
 }
 
-# With scope = project a commit alone can bring a finding into view, so an unchanged diff still
-# scans whenever the fingerprint, which holds the base commit, has moved.
+# With scope = project the whole project counts, so an empty change set still scans whenever the
+# fingerprint has moved: a turn that edits, commits and pushes leaves no diff.
 if [ -z "$changed" ] && [ "$scope" != project ]; then
   report_suppressions
   exit 0

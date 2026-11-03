@@ -42,6 +42,46 @@ says explicitly that the external reviewer was skipped — no retry loop.
 
 ## Decision log
 
+- **The Sonar gate's two caches key on content, not history** (2026-11-03, PersonalFinance).
+  Docs-only turns there kept blocking on full scans. The transcripts of 2026-11-01 show three:
+  160 s, 153 s and 163 s, each on a tree already analysed clean, each after a commit. A push on
+  2026-11-03 cost another. Two keys held history. The hook's fingerprint held the base commit and
+  `git diff <base>`, with untracked files as path and hash, so a push moved the base, and a
+  commit moved a new file from the untracked form into the diff. The gate's `inputs_fp` held the
+  HEAD commit and `git diff HEAD`, so any commit, a docs one included, voided its cache. Both
+  keys now list `mode blob stage path` for every file the working tree holds under their paths,
+  tracked or untracked and not ignored. An empty scratch index builds the list with
+  `update-index --info-only`: it writes no object, and no assume-unchanged or skip-worktree flag
+  in the real index can hide an edit from it. That took 214 ms on PersonalFinance's 1,879 gated
+  files. A copy of the real index took 34 ms but carries those flags. The hook's key also lists
+  the gated files that carry a flag. The old key's `git diff` carried the flags without saying
+  so, and they shape the change set: without them, clearing a flag on an edited file left the
+  key in place and its findings ungated (the review caught this). Under `scope = changed` the
+  hook keeps the base commit in its key, since the base decides which files count. Under
+  `scope = project` the base is dropped. The open question on base-branch commits keeps its
+  answer: identical content gives an identical analysis, and a red result is never recorded.
+  The scanner reads blame, so leaving history out of the gate's key holds only while its verdict
+  counts every open issue, hotspot and duplicated block, new code or not, and while
+  `--with-coverage`, whose quality gate reads new code, never answers Maven from that cache. A
+  submodule that is not checked out makes `update-index` fail for any key whose paths reach it.
+  The gate's Maven key covers the whole repository, so it then never answers from its cache, and
+  a JS-only turn rebuilds Maven too. The hook's key fails only for a submodule under its gated
+  paths, such as the JS project. The old diff passed over both. No opted-in repo has a
+  submodule, so this costs time only.
+  - **The repository a Stop gates.** The hook took it from the payload's `cwd` alone.
+    PersonalFinance's sessions end most turns in `private/plan`, a repository of its own with no
+    `.sonar-gate`, so those Stops did nothing in about 60 ms. Code changed in such a turn was
+    first checked at the next Stop from the root, often a docs-only one. When the shell's
+    repository has not opted in, the hook now gates `$CLAUDE_PROJECT_DIR`'s, if that one has. A
+    shell repository whose fork point still holds the marker keeps the "gate is OFF" message.
+    Cost: those Stops now take the audits' ~3 s.
+  - **Rejected: the `--indexed` list in the hook's key.** A push shortens that list. With the list
+    in the key, a push calls the gate, and the gate's Maven key covers the whole repository,
+    `.md` included. A docs commit since the last analysis would then re-scan Maven, as on
+    2026-11-03. The case given up: a base move (a push, a fetched force-push, a re-pointed
+    `origin/HEAD`) that lists a file whose content equals the old base's. It joins `--indexed`
+    unchecked until a fingerprinted edit.
+
 - **A public nested type only alongside its owner** (2026-10-26, from PersonalFinance's
   refactor backlog step 8). `conventions/java.md` § Stack, "Mainstream shapes", now keeps a
   public or protected nested type only when every class that uses it also uses the
@@ -1686,7 +1726,8 @@ says explicitly that the external reviewer was skipped — no retry loop.
   records. The base was a hardcoded `main`, so a `master` repo compared against HEAD and
   never gated committed branch work; it now comes from `origin/HEAD`, then `main`, then
   `master`. No repo carried `.sonar-gate` on that date, so the change waits for the
-  first one that opts in.
+  first one that opts in. *Superseded in part 2026-11-03:* the key is now the working tree's
+  content rather than the base commit and a diff. See that entry.
 - **MCP keys leave the session environment, and the servers are pinned** (2026-09-24).
   The shell rc exported the Brave key, and an old launcher script exported it again, so
   every Claude session and each of its Bash subprocesses carried it; `bash-guard.py` can
@@ -1887,13 +1928,19 @@ says explicitly that the external reviewer was skipped — no retry loop.
   takes it out of `git diff --name-only`. The file then drops out of the trigger, the
   suppression audit and the scan alike. This predates the pom audit. A cheap guard would
   refuse, or warn, when `git ls-files -v` shows a lowercase tag or `S` on a gated path.
+  *Partly answered 2026-11-03:* both caches' keys now read the working tree through an empty
+  index. Under `scope = project` a flagged edit re-scans and reaches the result. Under
+  `scope = changed` it re-scans only alongside another change and is still missing from
+  `--files`. Under both, the trigger, `--indexed` and the suppression audit still skip the file.
 - **A commit on the base branch leaves the Sonar gate's view** (2026-09-30). In a repo with
   no remote, where work lands directly on `main`, the fork point is `HEAD`. A mid-turn
   commit therefore takes a red file out of the diff, and the gate never looks at it again.
   Nothing guards this. Sessions commit only when asked, and PersonalFinance's steps run
   the gate before committing. *Answered 2026-10-11 for repos that set `scope = project` in
   `.sonar-gate`:* the base commit is in the fingerprint and the whole project is counted, so a
-  commit cannot take a finding out of view. Under `scope = changed` it still can.
+  commit cannot take a finding out of view. Under `scope = changed` it still can. *Since
+  2026-11-03* the key is the working tree's content rather than the base commit, which keeps this
+  answer: a commit changes no content, and a red result is never recorded.
 - **Test-running discipline**: the reviewer can run tests, but the invoking session is
   responsible for green tests before invocation. Whether the reviewer re-runs them is
   non-deterministic. Acceptable; revisit if review latency becomes a concern.
